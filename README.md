@@ -25,6 +25,30 @@ make lint     # ruff (black/flake8-compatible) + mypy type check
 
 Enable lint-on-commit hooks once: `pip install pre-commit && pre-commit install`.
 
+### Model providers
+
+`harness.yaml` holds named model profiles; agents reference them by key, so a
+provider switch is a one-line change. Supported: `openai-compatible` (any
+OpenAI-style endpoint — proxies, vLLM, OpenRouter), `google` (Gemini via
+generateContent, native function calling), `openai`, `anthropic`, `fake`
+(offline tests). Two operational notes from live runs:
+
+- **Gemini is region-restricted**: `generativelanguage.googleapis.com`
+  refuses unsupported egress regions (`FAILED_PRECONDITION "User location is
+  not supported"`). Express-mode keys (`AQ.Ab…`) additionally need the Agent
+  Platform API enabled in the owning GCP project.
+- **No external quota?** A loopback OpenAI-compatible bridge over
+  `z-ai-web-dev-sdk` ships in `tools/dev/` — `bun tools/dev/zai_openai_shim.mjs`
+  listens on `127.0.0.1:8788` with native function calling, upstream
+  throttling and 429 backoff built in. Point the default profile at
+  `http://127.0.0.1:8788/v1` (see `tools/dev/README.md`).
+
+Budget rails: every run is bounded by BOTH `budget.total_tokens` (token
+governor with NORMAL→SURGICAL→FINALIZE modes) and `run.wall_clock_seconds`
+(a monotonic deadline checked on every model call and stage boundary — a
+throttled provider can starve a run without spending tokens, so the clock
+trips first and finalizes honestly with a `budget.exhausted` event).
+
 ## Platform layer (beyond the hackathon — epic #69)
 
 The engine is a clean importable library, so the multi-service platform from
