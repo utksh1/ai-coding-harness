@@ -21,6 +21,7 @@ const (
 	classNormal lineClass = iota
 	classDim
 	classOK
+	classWarn
 	classErr
 )
 
@@ -54,6 +55,16 @@ func FormatActivity(ev Event, s *State) formattedLine {
 
 	case "architect.profile":
 		return formattedLine{"profile: " + profileLine(ev.Profile), classDim}
+
+	case "architect.retry":
+		detail := ev.Error
+		if detail == "" {
+			detail = "model unavailable"
+		}
+		return formattedLine{
+			fmt.Sprintf("architect attempt %d failed · retrying · %s", ev.Attempt, detail),
+			classWarn,
+		}
 
 	case "architect.plan":
 		repro := ev.ReproTest

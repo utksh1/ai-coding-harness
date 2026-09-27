@@ -549,6 +549,8 @@ func (m model) renderActivityTab(innerW int) []string {
 			style = dimStyle
 		case classOK:
 			style = okStyle
+		case classWarn:
+			style = warnStyle
 		case classErr:
 			style = errStyle
 		}

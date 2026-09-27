@@ -58,8 +58,8 @@ var (
 	headerTokenStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colAmber)).Bold(true)
 
 	okStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colGreen)).Bold(true)
-	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colRed)).Bold(true)
 	warnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colAmber)).Bold(true)
+	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colRed)).Bold(true)
 	blueStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colBlue)).Bold(true)
 	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colGray))
 	midStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colMid))

@@ -1162,7 +1162,7 @@ function renderVerify() {
 /* ======================= timeline ======================= */
 var EV_ICONS = {
   'run.start': '▶', 'run.end': '■', 'run.failed': '⨯',
-  'architect.profile': '◈', 'architect.plan': '▤', 'baseline.captured': '◫',
+  'architect.profile': '◈', 'architect.plan': '▤', 'architect.retry': '↺', 'baseline.captured': '◫',
   'specialist.assigned': '⇥', 'specialist.result': '⊙', 'specialist.collaborator_added': '⊕',
   'agent.step': '◐', 'agent.tool': '⚙', 'agent.usage': '⚡',
   'recovery.l1_retry': '↺', 'recovery.l2_guidance': '↯', 'recovery.l2_reroute': '⇄',
@@ -1175,6 +1175,7 @@ function evClass(ev) {
   if (k === 'run.end') return ev.success !== false ? 'c-ok' : 'c-fail';
   if (k === 'run.failed') return 'c-fail';
   if (k === 'architect.profile' || k === 'architect.plan') return 'c-arch';
+  if (k === 'architect.retry') return 'c-warn';
   if (k === 'baseline.captured') return 'c-dim';
   if (k === 'specialist.assigned') return 'c-run';
   if (k === 'specialist.result') return ev.success !== false ? 'c-ok' : 'c-fail';
@@ -1216,6 +1217,10 @@ function describeEvent(ev) {
       var ids = (ev.subtasks || []).map(function (t) { return typeof t === 'string' ? t : (t && t.id) || '?'; });
       text = 'plan — ' + ids.length + ' subtask' + (ids.length === 1 ? '' : 's') + ' (' + ids.join(', ') + ')' +
         (ev.reproduction_test ? ' · reproduction test ' + ev.reproduction_test : ' · no reproduction test');
+      break;
+    case 'architect.retry':
+      text = 'architect attempt ' + (ev.attempt != null ? ev.attempt : '?') + ' failed · retrying' +
+        (ev.error ? ' — ' + ev.error : ' — model unavailable');
       break;
     case 'baseline.captured':
       text = 'baseline — runnable ' + (ev.runnable !== false ? '✓' : '✕') +

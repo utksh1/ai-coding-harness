@@ -229,3 +229,22 @@ func TestFormatActivityBaselineAndUnknown(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func TestFormatActivityArchitectRetry(t *testing.T) {
+	st := collabState(t)
+
+	retry := FormatActivity(Event{
+		Kind: "architect.retry", Attempt: 1, Error: "model request failed after 7 attempts: HTTP 503",
+	}, st)
+	if retry.Class != classWarn {
+		t.Fatalf("retry class = %v", retry.Class)
+	}
+	if !strings.Contains(retry.Line, "attempt 1 failed") || !strings.Contains(retry.Line, "HTTP 503") {
+		t.Fatalf("retry line = %q", retry.Line)
+	}
+
+	bare := FormatActivity(Event{Kind: "architect.retry", Attempt: 2}, st)
+	if !strings.Contains(bare.Line, "model unavailable") {
+		t.Fatalf("bare retry line = %q", bare.Line)
+	}
+}
