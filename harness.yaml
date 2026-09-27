@@ -1,10 +1,44 @@
 version: 1
 
 models:
+  # Live dev backend: loopback OpenAI-compatible bridge over z-ai-web-dev-sdk
+  # (GLM family, native function calling). Start it first:
+  #   bun tools/dev/zai_openai_shim.mjs     # listens on 127.0.0.1:8788
+  # The shim throttles + retries upstream 429s itself; the value of AI_API_KEY
+  # is ignored by it (any non-empty string works).
   default:
     provider: openai-compatible
-    name: gpt-5.6-luna
+    name: glm-4-plus
     api_key_env: AI_API_KEY
+    base_url: http://127.0.0.1:8788/v1
+    temperature: 0.0
+    max_tokens: 8192
+    request_timeout_seconds: 240
+    max_retries: 4
+    extra:
+      backoff_base_seconds: 3.0
+
+  # Gemini via the native GoogleProvider (generativelanguage generateContent).
+  # The Gemini API is REGION-RESTRICTED: calls from unsupported egress regions
+  # fail with FAILED_PRECONDITION "User location is not supported". Set
+  # GEMINI_API_KEY and switch agents to `model: gemini` from a supported
+  # region. Keys of the form "AQ.Ab..." (express mode) also work after the
+  # "Agent Platform API" is enabled in the owning GCP project.
+  gemini:
+    provider: google
+    name: gemini-2.5-flash
+    api_key_env: GEMINI_API_KEY
+    base_url: https://generativelanguage.googleapis.com
+    temperature: 0.0
+    max_tokens: 8192
+    request_timeout_seconds: 240
+    max_retries: 4
+
+  # Private proxy pool (kept for when the account plan recovers).
+  luna:
+    provider: openai-compatible
+    name: gpt-5.6-luna
+    api_key_env: LUNA_API_KEY
     base_url: https://api.utksh.in/v1
     temperature: 0.0
     max_tokens: 8192

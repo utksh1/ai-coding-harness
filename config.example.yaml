@@ -7,6 +7,23 @@
 
 version: 1
 
+# Multiple named profiles may coexist; agents reference them by key, so a
+# provider switch is a one-line `model:` change per agent (or a swap of the
+# default profile). Provider cheatsheet:
+#
+#   openai-compatible  any OpenAI-style /chat/completions endpoint (proxies,
+#                      vLLM, OpenRouter, the local dev shim below)
+#   google             Gemini via generateContent (REGION-RESTRICTED: the API
+#                      refuses unsupported egress regions with
+#                      FAILED_PRECONDITION "User location is not supported")
+#   openai             explicit alias for the official OpenAI endpoint
+#   anthropic          Claude messages API
+#   fake               offline scripted responses for tests
+#
+# Local dev backend (no external quota needed): start the loopback shim and
+# point a profile at it - see tools/dev/README.md:
+#   bun tools/dev/zai_openai_shim.mjs      # 127.0.0.1:8788, GLM family,
+#                                          # native function calling
 models:
   default:
     # The organizers' prescribed model goes here - config change only.
@@ -18,6 +35,14 @@ models:
     max_tokens: 4096
     request_timeout_seconds: 120
     max_retries: 3
+
+  # Example Gemini profile (native provider, function calling included):
+  # gemini:
+  #   provider: google
+  #   name: gemini-2.5-flash
+  #   api_key_env: GEMINI_API_KEY
+  #   temperature: 0.0
+  #   max_tokens: 8192
 
 agents:
   - agent_id: architect-1
