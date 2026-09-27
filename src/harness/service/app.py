@@ -21,8 +21,11 @@ from harness.config import HarnessConfig
 from harness.engine.evidence import EvidencePack
 from harness.engine.pipeline import HarnessPipeline
 from harness.infrastructure.context_store import create_context_store
+from harness.infrastructure.logging import get_logger
 from harness.infrastructure.model_providers import create_model_provider
 from harness.service.events import RedisEventPublisher
+
+logger = get_logger(__name__)
 
 
 class AnalyzeRequest(BaseModel):
@@ -47,6 +50,42 @@ class RunRequest(BaseModel):
     issue: str = Field(min_length=1)
     repo_root: str = "."
     demo_mode: bool = False
+    run_id: str | None = None
+    """Gateway-supplied id: threaded through the pipeline so the task, the
+    streamed events, and the evidence directory share ONE id."""
+
+
+EVIDENCE_FILES = (
+    "patch.diff",
+    "summary.md",
+    "test-report.md",
+    "token-report.json",
+    "baseline.json",
+)
+"""Whitelist of evidence-pack files exposed over HTTP (no traversal risk)."""
+
+
+def _safe_run_id(run_id: str) -> bool:
+    """Run ids are hex-ish tokens; anything path-like is refused."""
+    return bool(run_id) and "/" not in run_id and "\\" not in run_id and ".." not in run_id
+
+
+RUN_ROOT_REGISTRY_MAX = 256
+"""Cap on remembered run->repo mappings (evicts oldest first)."""
+
+
+def _remember_run_root(
+    registry: dict[str, str], run_id: str, repo_root: str, cap: int = RUN_ROOT_REGISTRY_MAX
+) -> None:
+    """Record where a run executed so evidence lookups need no repo_root.
+
+    The gateway's evidence proxy does not know the target repo; the
+    orchestrator does (it executed the run there). The registry wins over
+    query params and falls back to them for unknown runs."""
+    registry.pop(run_id, None)
+    registry[run_id] = repo_root
+    while len(registry) > cap:
+        registry.pop(next(iter(registry)))
 
 
 def _architect_of(pipeline: HarnessPipeline) -> Any:
@@ -93,6 +132,7 @@ def create_app(
         return resolved_config
 
     pipelines: dict[str, HarnessPipeline] = {}
+    run_roots: dict[str, str] = {}
 
     def _pipeline(repo_root: str, event_sink: Any = None) -> HarnessPipeline:
         """One shared pipeline per repo root: agent/manager state must
@@ -131,6 +171,22 @@ def create_app(
     async def health() -> dict[str, Any]:
         return {"status": "ok", "service": "orchestrator", "version": __version__}
 
+    @app.get("/api/agents")
+    async def agents() -> dict[str, Any]:
+        """The configured agent roster (gateway proxies this to the cockpit)."""
+        cfg = _config()
+        return {
+            "agents": [
+                {
+                    "agent_id": agent.agent_id,
+                    "role": agent.role,
+                    "model": agent.model,
+                }
+                for agent in cfg.agents
+                if agent.enabled
+            ]
+        }
+
     @app.post("/agent/architect/analyze")
     async def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         from harness.tools.filesystem import summarize_repository
@@ -164,10 +220,6 @@ def create_app(
         await manager.assign_task(task, request.agent_id)
         return {"assigned": True, "task": task.id, "agent": request.agent_id}
 
-        task = Task.model_validate(request.task)
-        await manager.assign_task(task, request.agent_id)
-        return {"assigned": True, "task": task.id, "agent": request.agent_id}
-
     @app.post("/agent/specialist/execute")
     async def execute(request: ExecuteRequest) -> dict[str, Any]:
         from harness.agents.task import Task
@@ -196,7 +248,10 @@ def create_app(
     async def run(request: RunRequest) -> dict[str, Any]:
         import uuid
 
-        run_id = uuid.uuid4().hex[:12]
+        run_id = request.run_id or uuid.uuid4().hex[:12]
+        if not _safe_run_id(run_id):
+            return {"success": False, "error": "invalid run_id", "outcome": "FAILED"}
+        _remember_run_root(run_roots, run_id, request.repo_root)
         pipeline = _pipeline(request.repo_root, event_sink=publisher.sink_for(run_id))
         key_env = _config().models["default"].api_key_env
         has_key = bool(
@@ -211,7 +266,26 @@ def create_app(
             or (os.environ.get("HARNESS_DEMO") == "1")
             or (not has_key and _config().models["default"].provider != "fake")
         )
-        outcome = await pipeline.run(request.issue, demo_mode=demo)
+        try:
+            outcome = await pipeline.run(
+                request.issue,
+                demo_mode=demo,
+                run_id=run_id,
+                event_sink=publisher.sink_for(run_id),
+            )
+        except Exception as exc:  # transport death mid-run: fail honestly, never hang
+            logger.error("agent run crashed", run_id=run_id, error=str(exc)[:300])
+            publisher.publish(
+                run_id, {"event": "run.failed", "run_id": run_id, "error": str(exc)[:300]}
+            )
+            publisher.publish(run_id, {"event": "run.end", "run_id": run_id, "success": False})
+            return {
+                "run_id": run_id,
+                "success": False,
+                "outcome": f"FAILED: model transport error ({type(exc).__name__})",
+                "evidence_path": "",
+                "flags": [f"transport error: {type(exc).__name__}"],
+            }
         return {
             "run_id": outcome.run_id,
             "success": outcome.success,
@@ -236,6 +310,38 @@ def create_app(
             "found": pack is not None,
             "run_id": pack.run_id if pack else None,
             "path": str(pack.path) if pack else None,
+        }
+
+    @app.get("/api/evidence/{run_id}/files")
+    async def evidence_files(run_id: str, repo_root: str = ".") -> dict[str, Any]:
+        """List one run's evidence-pack files (cockpit diff/report loading).
+
+        `repo_root` is resolved from the run registry first: the gateway's
+        proxy calls without a repo_root, and the orchestrator already knows
+        where each run executed."""
+        if not _safe_run_id(run_id):
+            return {"found": False, "error": "invalid run_id"}
+        root = Path(run_roots.get(run_id) or repo_root) / _config().run.results_dir
+        pack_dir = root / run_id
+        if not pack_dir.is_dir():
+            return {"found": False, "run_id": run_id}
+        files = sorted(item.name for item in pack_dir.iterdir() if item.is_file())
+        return {"found": True, "run_id": run_id, "files": files}
+
+    @app.get("/api/evidence/{run_id}/file/{name}")
+    async def evidence_file(run_id: str, name: str, repo_root: str = ".") -> dict[str, Any]:
+        """Serve one whitelisted evidence file's text content."""
+        if not _safe_run_id(run_id) or name not in EVIDENCE_FILES:
+            return {"found": False, "error": "file not exposed"}
+        root = run_roots.get(run_id) or repo_root
+        path = Path(root) / _config().run.results_dir / run_id / name
+        if not path.is_file():
+            return {"found": False, "run_id": run_id, "name": name}
+        return {
+            "found": True,
+            "run_id": run_id,
+            "name": name,
+            "content": path.read_text(encoding="utf-8"),
         }
 
     return app

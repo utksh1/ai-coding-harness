@@ -3,12 +3,15 @@ version: 1
 models:
   default:
     provider: openai-compatible
-    name: claude-sonnet-4.5
+    name: claude-sonnet-4-5
     api_key_env: AI_API_KEY
-    base_url: http://localhost:5580/v1
+    base_url: https://ai.utksh.in/claude-kiro-oauth/v1
     temperature: 0.0
-    max_tokens: 4096
-    request_timeout_seconds: 180
+    max_tokens: 8192
+    request_timeout_seconds: 240
+    max_retries: 6
+    extra:
+      backoff_base_seconds: 3.0
 
 agents:
   - agent_id: architect-1

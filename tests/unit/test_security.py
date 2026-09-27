@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -186,3 +187,24 @@ def test_audit_log_corrupted_tail_and_export(tmp_path: Path) -> None:
     assert ok
     exported = revived.export(tmp_path / "exports" / "compliance.jsonl")
     assert len(exported.read_text().strip().splitlines()) == 3  # 2 entries + corrupt tail
+
+
+def test_audit_log_self_heals_after_directory_removal(tmp_path: Path) -> None:
+    """Regression (live run 2026-09-27): a long-lived orchestrator caches the
+    pipeline; cleaning the target repo between runs removed .harness/ and the
+    next append crashed with FileNotFoundError. append must recreate the
+    directory and start a fresh genesis chain."""
+    harness_dir = tmp_path / ".harness"
+    log = AuditLog(harness_dir / "audit.jsonl")
+    log.append("pipeline", "run.start", "run-1")
+    first_hash = log._prev_hash
+
+    shutil.rmtree(harness_dir)  # repo cleanup between runs
+    log.append("pipeline", "run.start", "run-2")  # must not raise
+
+    entries = log.entries()
+    assert len(entries) == 1
+    assert entries[0]["prev_hash"] == GENESIS  # fresh chain, not orphaned
+    assert log._prev_hash != first_hash
+    ok, reason = log.verify()
+    assert ok and reason is None

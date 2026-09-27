@@ -90,6 +90,158 @@ def test_health() -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_agents_endpoint_lists_configured_roster() -> None:
+    app = create_app(config=_service_config(), provider=object())
+    client = TestClient(app)
+    response = client.get("/api/agents")
+    assert response.status_code == 200
+    agents = response.json()["agents"]
+    assert {a["agent_id"] for a in agents} == {"arch-1", "mgr-1", "ver-1"}
+    assert {a["role"] for a in agents} == {"architect", "manager", "verifier"}
+
+
+def test_run_endpoint_honors_supplied_run_id(demo_repo: Path, fake_model_config) -> None:
+    """The gateway threads ONE run id: events, response, and evidence share it."""
+    fake_redis = FakeRedis()
+    app = create_app(
+        config=_service_config(),
+        provider=_scripted_provider(fake_model_config),
+        redis_client=fake_redis,
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/agent/run",
+        json={
+            "issue": "greet should work",
+            "repo_root": str(demo_repo / "target"),
+            "run_id": "gateway-42",
+        },
+    )
+    body = response.json()
+    assert body["run_id"] == "gateway-42"
+    assert (demo_repo / "target" / "results" / "gateway-42").is_dir()
+    # every streamed event carries the same id
+    payloads = [json.loads(message) for _, message in fake_redis.published]
+    assert payloads and all(p["run_id"] == "gateway-42" for p in payloads)
+    # the new cockpit events stream too: verification stages + token usage
+    kinds = [p["event"] for p in payloads]
+    assert "verification.stage" in kinds
+    assert "tokens.usage" in kinds
+    stage = next(p for p in payloads if p["event"] == "verification.stage")
+    assert stage["stage"] == "1-integrity" and stage["passed"] is True
+    usage = next(p for p in payloads if p["event"] == "tokens.usage")
+    assert usage["usage"]["total_tokens"] >= 0
+
+
+def test_run_endpoint_rejects_unsafe_run_id(demo_repo: Path, fake_model_config) -> None:
+    app = create_app(config=_service_config(), provider=_scripted_provider(fake_model_config))
+    client = TestClient(app)
+    response = client.post(
+        "/agent/run",
+        json={"issue": "x", "repo_root": ".", "run_id": "../escape"},
+    )
+    body = response.json()
+    assert body["success"] is False and "invalid run_id" in body["error"]
+
+
+def test_evidence_files_endpoint(demo_repo: Path, fake_model_config) -> None:
+    app = create_app(config=_service_config(), provider=_scripted_provider(fake_model_config))
+    client = TestClient(app)
+    client.post(
+        "/agent/run",
+        json={"issue": "x", "repo_root": str(demo_repo / "target"), "run_id": "evd-1"},
+    )
+    response = client.get(
+        "/api/evidence/evd-1/files", params={"repo_root": str(demo_repo / "target")}
+    )
+    assert response.json()["found"] is True
+    assert "patch.diff" in response.json()["files"]
+
+    missing = client.get(
+        "/api/evidence/nope/files", params={"repo_root": str(demo_repo / "target")}
+    )
+    assert missing.json()["found"] is False
+
+    # path-like run ids: the router normalizes "../", but a backslash
+    # survives routing and must be refused by the endpoint guard
+    unsafe = client.get("/api/evidence/a\\b/files")
+    assert unsafe.json()["found"] is False and "invalid run_id" in unsafe.json()["error"]
+    from harness.service.app import _safe_run_id
+
+    assert _safe_run_id("../escape") is False
+    assert _safe_run_id("evd-1") is True
+    assert _safe_run_id("") is False
+
+
+def test_evidence_file_endpoint(demo_repo: Path, fake_model_config) -> None:
+    app = create_app(config=_service_config(), provider=_scripted_provider(fake_model_config))
+    client = TestClient(app)
+    client.post(
+        "/agent/run",
+        json={"issue": "x", "repo_root": str(demo_repo / "target"), "run_id": "evd-2"},
+    )
+    response = client.get(
+        "/api/evidence/evd-2/file/summary.md", params={"repo_root": str(demo_repo / "target")}
+    )
+    body = response.json()
+    assert body["found"] is True and "VERIFIED" in body["content"]
+
+    # a whitelisted name that this run never wrote: baseline.json is removed
+    # to simulate a pack without it (the guard branch needs a real miss)
+    baseline_path = demo_repo / "target" / "results" / "evd-2" / "baseline.json"
+    if baseline_path.exists():
+        baseline_path.unlink()
+    missing_file = client.get(
+        "/api/evidence/evd-2/file/baseline.json", params={"repo_root": str(demo_repo / "target")}
+    )
+    assert missing_file.json()["found"] is False
+
+    forbidden = client.get(
+        "/api/evidence/evd-2/file/trace.jsonl", params={"repo_root": str(demo_repo / "target")}
+    )
+    assert forbidden.json()["found"] is False and "not exposed" in forbidden.json()["error"]
+
+    missing_run = client.get(
+        "/api/evidence/ghost/file/summary.md", params={"repo_root": str(demo_repo / "target")}
+    )
+    assert missing_run.json()["found"] is False
+
+
+def test_evidence_resolves_repo_from_run_registry(demo_repo: Path, fake_model_config) -> None:
+    """The gateway's evidence proxy passes no repo_root; the orchestrator
+    remembers where each run executed and resolves the pack from there."""
+    app = create_app(config=_service_config(), provider=_scripted_provider(fake_model_config))
+    client = TestClient(app)
+    client.post(
+        "/agent/run",
+        json={"issue": "x", "repo_root": str(demo_repo / "target"), "run_id": "evd-reg"},
+    )
+    # no repo_root query param at all - the registry must supply it
+    listing = client.get("/api/evidence/evd-reg/files")
+    assert listing.json()["found"] is True
+    assert "patch.diff" in listing.json()["files"]
+
+    content = client.get("/api/evidence/evd-reg/file/summary.md")
+    assert content.json()["found"] is True and "VERIFIED" in content.json()["content"]
+
+    # unknown run + no repo_root: falls back to "." and misses honestly
+    unknown = client.get("/api/evidence/unknown-run/file/summary.md")
+    assert unknown.json()["found"] is False
+
+
+def test_run_root_registry_evicts_oldest() -> None:
+    from harness.service.app import _remember_run_root
+
+    registry: dict[str, str] = {}
+    for i in range(4):
+        _remember_run_root(registry, f"run-{i}", f"/repo-{i}", cap=3)
+    assert list(registry) == ["run-1", "run-2", "run-3"]  # run-0 evicted
+    # re-recording an existing id refreshes without growth
+    _remember_run_root(registry, "run-1", "/repo-1b", cap=3)
+    assert list(registry) == ["run-2", "run-3", "run-1"]
+    assert registry["run-1"] == "/repo-1b"
+
+
 def test_analyze_endpoint(demo_repo: Path, fake_model_config) -> None:
     app = create_app(config=_service_config(), provider=_scripted_provider(fake_model_config))
     client = TestClient(app)
@@ -179,6 +331,43 @@ def test_run_demo_mode_flag(demo_repo: Path, fake_model_config) -> None:
         },
     )
     assert response.json()["success"] is True
+
+
+class _ExplodingProvider:
+    """A provider whose generate raises: transport death mid-run."""
+
+    async def generate(self, *args, **kwargs):  # pragma: no cover - raises
+        raise RuntimeError("model request failed after 4 attempts: 429")
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_run_endpoint_fails_gracefully_on_transport_death(
+    demo_repo: Path, fake_model_config
+) -> None:
+    """A dead model transport must end in an honest failure, never a 500 hang."""
+    fake_redis = FakeRedis()
+    app = create_app(
+        config=_service_config(),
+        provider=_ExplodingProvider(),
+        redis_client=fake_redis,
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/agent/run",
+        json={"issue": "x", "repo_root": str(demo_repo / "target"), "run_id": "boom-1"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["run_id"] == "boom-1"
+    assert "FAILED" in body["outcome"] and "transport" in body["flags"][0]
+    payloads = [json.loads(message) for _, message in fake_redis.published]
+    kinds = [p["event"] for p in payloads]
+    assert "run.failed" in kinds and "run.end" in kinds
+    end = next(p for p in payloads if p["event"] == "run.end")
+    assert end["success"] is False and end["run_id"] == "boom-1"
 
 
 def test_evidence_latest_endpoint(demo_repo: Path, fake_model_config) -> None:
@@ -313,11 +502,26 @@ def test_publisher_lazy_client_from_url(monkeypatch) -> None:
 
 
 def test_reproduction_node_normalization() -> None:
-    """Architects sometimes emit 'pytest node::id' — the gate strips the prefix."""
+    """Architects emit node ids, prefixed ids, and full command lines."""
     from harness.verification.pipeline import _reproduction_node
 
     assert _reproduction_node("pytest test_app.py::test_add") == "test_app.py::test_add"
     assert _reproduction_node("test_app.py::test_add") == "test_app.py::test_add"
+    # full command lines with trailing flags (the real-model regression:
+    # 'pytest test.py -v' used to become the literal path 'test.py -v')
+    assert _reproduction_node("pytest test_calculator.py -v") == "test_calculator.py"
+    assert _reproduction_node("pytest -v test_calculator.py") == "test_calculator.py"
+    assert _reproduction_node("python -m pytest test_app.py::test_add") == "test_app.py::test_add"
+    assert _reproduction_node("python3 -m pytest -q test_app.py") == "test_app.py"
+    # value-taking flags: flag AND its value must be skipped
+    assert _reproduction_node("pytest -k add test_app.py") == "test_app.py"
+    assert _reproduction_node("pytest test_app.py --tb=short") == "test_app.py"
+    assert _reproduction_node("pytest test_app.py --junitxml out.xml") == "test_app.py"
+    # degenerate inputs
+    assert _reproduction_node("pytest") == ""
+    assert _reproduction_node("pytest -v") == ""
+    assert _reproduction_node("") == ""
+    assert _reproduction_node("   ") == ""
 
 
 async def _noop():

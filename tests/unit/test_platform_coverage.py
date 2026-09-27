@@ -90,11 +90,45 @@ def test_publisher_relays_events_to_gateway(monkeypatch) -> None:
     import urllib.request
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("GATEWAY_EVENTS_URL", "http://gateway:8080/api/events")
     publisher = RedisEventPublisher()
     publisher.publish("run-9", {"event": "run.start"})
     publisher.sink_for("run-9")({"event": "phase"})
     assert {url.rsplit("/", 1)[-1] for url, _ in relayed} == {"events"}
     assert all(b"run.start" in data or b"phase" in data for _, data in relayed)
+
+
+def test_publisher_makes_no_network_calls_without_gateway_url(monkeypatch) -> None:
+    """No GATEWAY_EVENTS_URL: no HTTP attempt at all - unit tests must never
+    fire real requests at whatever gateway happens to run on localhost
+    (that pollution shipped event noise to a live cockpit once)."""
+
+    def explode(request, timeout=None):
+        raise AssertionError("network call attempted without GATEWAY_EVENTS_URL")
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", explode)
+    monkeypatch.delenv("GATEWAY_EVENTS_URL", raising=False)
+    publisher = RedisEventPublisher()
+    publisher.publish("run-x", {"event": "run.start"})  # must be a silent no-op
+    publisher.sink_for("run-x")({"event": "phase"})
+
+
+def test_publisher_swallows_gateway_transport_failure(monkeypatch) -> None:
+    """A configured but unreachable gateway must never break a run: the
+    POST failure is logged-and-swallowed (graceful degradation)."""
+
+    def refuse(request, timeout=None):
+        raise OSError("connection refused")
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    monkeypatch.setenv("GATEWAY_EVENTS_URL", "http://gateway-nowhere:9999/api/events")
+    publisher = RedisEventPublisher()
+    publisher.publish("run-down", {"event": "run.start"})  # must not raise
+    publisher.sink_for("run-down")({"event": "phase"})
 
 
 # -- `harness tui` ------------------------------------------------------------------

@@ -171,9 +171,19 @@ class HarnessPipeline:
         self._specialist_slots = slots
 
     async def run(
-        self, issue_text: str, demo_mode: bool = False, event_sink: Any = None
+        self,
+        issue_text: str,
+        demo_mode: bool = False,
+        event_sink: Any = None,
+        run_id: str | None = None,
     ) -> PipelineOutcome:
-        run_id = uuid.uuid4().hex[:12]
+        """Execute one full pipeline run.
+
+        `run_id` (optional) lets the platform layer correlate the gateway's
+        task id, the streamed events, and the evidence directory under ONE
+        id. Left unset, the pipeline mints its own (eval-mode CLI behavior).
+        """
+        run_id = run_id or uuid.uuid4().hex[:12]
         governor = BudgetGovernor(self._store, self._config.budget, run_id)
         for agent in self._agents.values():
             agent.governor = governor
@@ -230,12 +240,18 @@ class HarnessPipeline:
                 outcomes = await self._run_batch(batch, governor, metrics, pack, run_id, architect)
                 task_results.extend(outcomes)
         metrics.stage_finished("specialists")
+        # Live token meter for the cockpit: cumulative usage after the
+        # specialist phase (the UI sets, never accumulates, this value).
+        pack.trace(self._tokens_event(run_id, governor, "specialists"))
 
         metrics.stage_started("verification")
         diff = self._working_diff()
         verification = VerificationPipeline(self._repo_root, baseline)
-        stage_results = await verification.run(diff, plan, architect)
+        stage_results = await verification.run(
+            diff, plan, architect, run_id=run_id, tracer=pack.trace
+        )
         metrics.stage_finished("verification")
+        pack.trace(self._tokens_event(run_id, governor, "verification"))
         pack.patch(diff)
         pack.test_report(stage_report(stage_results))
         pack.token_report(metrics.report())
@@ -400,6 +416,21 @@ class HarnessPipeline:
             }
         )
         return agent
+
+    def _tokens_event(self, run_id: str, governor: BudgetGovernor, phase: str) -> dict[str, Any]:
+        """Cumulative token-usage event for the live cockpit meters."""
+        usage = self._store.token_usage(run_id)
+        return {
+            "event": "tokens.usage",
+            "run_id": run_id,
+            "phase": phase,
+            "governor_mode": governor.mode().value,
+            "usage": {
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+            },
+        }
 
     def _working_diff(self) -> str:
         try:

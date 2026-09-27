@@ -159,6 +159,36 @@ async def test_baseline_passes_when_bug_fixed(repro_repo: Path) -> None:
     assert "no regressions vs baseline" in tests.detail
 
 
+async def test_capture_baseline_normalizes_command_style_repro(repro_repo: Path) -> None:
+    """Regression (live Claude run 2026-09-27): the architect emitted a full
+    command 'pytest test_greet.py -v'; the raw remainder 'test_greet.py -v'
+    used to reach pytest as ONE argv element -> 'file or directory not
+    found' -> the gate failed a correct patch. The baseline must store the
+    normalized node id and probe the real test."""
+    tool = RunTestsTool(repro_repo)
+    baseline = await capture_baseline(repro_repo, tool, reproduction_test="pytest test_greet.py -v")
+    assert baseline.reproduction_test == "test_greet.py"
+    assert baseline.reproduction_failing_before is True
+
+
+async def test_baseline_passes_when_bug_fixed_with_command_style_repro(
+    repro_repo: Path,
+) -> None:
+    """The live-run regression: correct fix + command-style repro command
+    must verify PASS (repro file exists, flips to green, no regressions)."""
+    (repro_repo / "app.py").write_text("def greet():\n    return 'hello'\n")
+    tool = RunTestsTool(repro_repo)
+    baseline = await capture_baseline(repro_repo, tool, reproduction_test="pytest test_greet.py -v")
+    verification = VerificationPipeline(repro_repo, baseline)
+    diff = "diff --git a/app.py\n+++ b/app.py\n+hello\n"
+    results = await verification.run(diff, PLAN, architect=None)
+    tests = {r.name: r for r in results}["3-local-tests"]
+    assert tests.evidence["reproduction_passes_after"] is True
+    assert "file or directory not found" not in tests.evidence["reproduction_output_tail"]
+    assert tests.passed
+    assert "no regressions vs baseline" in tests.detail
+
+
 async def test_baseline_flags_new_regression(repro_repo: Path) -> None:
     """A newly broken test is a regression even with pre-existing failures."""
     tool = RunTestsTool(repro_repo)

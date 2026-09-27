@@ -55,22 +55,26 @@ async def capture_baseline(
     repo_root: Path, run_tests: RunTestsTool, reproduction_test: str = ""
 ) -> Baseline:
     """Run the suite once on unmodified code; optionally probe the
-    reproduction test (expected to fail before the patch)."""
+    reproduction test (expected to fail before the patch).
+
+    The stored `reproduction_test` is normalized to a bare pytest node id
+    (path or path::test): architects routinely emit full command lines such
+    as 'pytest test.py -v', and a raw command string would later be passed
+    to the runner as ONE argv element ("file or directory not found")."""
+    from harness.verification.pipeline import _reproduction_node
+
     framework, _ = detect_test_runner(repo_root)
     if framework == "none":
         return Baseline(runnable=False, framework="none")
 
+    normalized_repro = _reproduction_node(reproduction_test)
     extra = ["-rf", "--tb=no"] if framework == "pytest" else []
     result = await run_tests.execute_async(extra_args=extra)
     failed = parse_failed_tests(result.output or "") if framework == "pytest" else set()
 
     reproduction_failing_before: bool | None = None
-    if reproduction_test and framework == "pytest":
-        from harness.verification.pipeline import _reproduction_node
-
-        repro = await run_tests.execute_async(
-            path=_reproduction_node(reproduction_test), extra_args=["--tb=no"]
-        )
+    if normalized_repro and framework == "pytest":
+        repro = await run_tests.execute_async(path=normalized_repro, extra_args=["--tb=no"])
         reproduction_failing_before = not repro.success
 
     return Baseline(
@@ -78,7 +82,7 @@ async def capture_baseline(
         framework=framework,
         all_green=result.success,
         failed=failed,
-        reproduction_test=reproduction_test,
+        reproduction_test=normalized_repro,
         reproduction_failing_before=reproduction_failing_before,
         output_tail=(result.output or "")[-2000:],
     )

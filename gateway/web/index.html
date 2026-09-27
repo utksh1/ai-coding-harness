@@ -38,7 +38,7 @@
 
     body {
       background-color: var(--bg);
-      background-image: 
+      background-image:
         radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.08) 0px, transparent 50%),
         radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.06) 0px, transparent 50%);
       color: var(--text);
@@ -148,6 +148,12 @@
       box-shadow: 0 4px 16px var(--primary-glow);
     }
 
+    .btn-primary:disabled {
+      opacity: 0.65;
+      cursor: progress;
+      transform: none;
+    }
+
     .btn-secondary {
       background: var(--surface);
       color: var(--text);
@@ -158,6 +164,17 @@
       background: var(--surface-hover);
       border-color: rgba(255, 255, 255, 0.15);
     }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.25);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     main {
       flex: 1;
@@ -306,6 +323,55 @@
       color: #fff;
     }
 
+    /* Run result banner */
+    .run-result {
+      display: none;
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      font-size: 0.85rem;
+      border: 1px solid var(--card-border);
+      background: var(--surface);
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .run-result.visible { display: flex; }
+
+    .run-result.ok {
+      border-color: rgba(16, 185, 129, 0.4);
+      background: rgba(16, 185, 129, 0.08);
+    }
+
+    .run-result.fail {
+      border-color: rgba(239, 68, 68, 0.4);
+      background: rgba(239, 68, 68, 0.08);
+    }
+
+    .run-result .outcome-line { font-weight: 600; }
+
+    .run-result .meta-line {
+      color: var(--text-dim);
+      font-size: 0.75rem;
+      font-family: 'Fira Code', monospace;
+    }
+
+    .evidence-links { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .evidence-link {
+      font-size: 0.72rem;
+      padding: 3px 10px;
+      border-radius: 9999px;
+      border: 1px solid var(--card-border);
+      color: #60a5fa;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .evidence-link:hover {
+      border-color: var(--primary);
+      background: rgba(59, 130, 246, 0.15);
+    }
+
     /* Agent Roster */
     .agent-item {
       display: flex;
@@ -339,6 +405,13 @@
       font-weight: 600;
     }
 
+    .agent-name .agent-id {
+      font-weight: 400;
+      color: var(--text-dim);
+      font-size: 0.7rem;
+      font-family: 'Fira Code', monospace;
+    }
+
     .agent-role {
       font-size: 0.7rem;
       color: var(--text-dim);
@@ -350,6 +423,7 @@
       padding: 2px 8px;
       border-radius: 4px;
       text-transform: uppercase;
+      white-space: nowrap;
     }
 
     .badge-idle { background: rgba(148, 163, 184, 0.1); color: var(--text-muted); }
@@ -387,9 +461,16 @@
     }
 
     .event-card.event-run-start { border-left-color: var(--primary); }
+    .event-card.event-plan { border-left-color: var(--accent); }
+    .event-card.event-specialist { border-left-color: #f59e0b; }
     .event-card.event-specialist-result-ok { border-left-color: var(--success); }
     .event-card.event-specialist-result-fail { border-left-color: var(--error); }
-    .event-card.event-verification { border-left-color: var(--accent); }
+    .event-card.event-verification-pass { border-left-color: var(--success); }
+    .event-card.event-verification-fail { border-left-color: var(--error); }
+    .event-card.event-tokens { border-left-color: #64748b; }
+    .event-card.event-recovery { border-left-color: var(--warning); }
+    .event-card.event-run-end-ok { border-left-color: var(--success); }
+    .event-card.event-run-end-fail { border-left-color: var(--error); }
 
     .event-meta {
       display: flex;
@@ -406,7 +487,7 @@
     .event-detail {
       color: var(--text-muted);
       font-size: 0.8rem;
-      word-break: break-all;
+      word-break: break-word;
     }
 
     /* Verification Stages */
@@ -432,15 +513,19 @@
       padding: 12px;
       font-family: 'Fira Code', monospace;
       font-size: 0.8rem;
-      max-height: 280px;
+      max-height: 320px;
       overflow-y: auto;
       white-space: pre-wrap;
       color: var(--text-muted);
       border: 1px solid var(--card-border);
     }
 
+    .diff-box div { display: block; }
+
     .diff-add { color: #34d399; background: rgba(16, 185, 129, 0.08); }
     .diff-del { color: #f87171; background: rgba(239, 68, 68, 0.08); }
+    .diff-hunk { color: #60a5fa; background: rgba(59, 130, 246, 0.08); }
+    .diff-file { color: #c084fc; font-weight: 600; }
 
     /* Footer */
     footer {
@@ -507,9 +592,9 @@
             </div>
 
             <div class="presets">
-              <span class="preset-chip" onclick="setPreset('Fix negative addition: add(-2, -3) should equal -5')">Calculator Negatives</span>
-              <span class="preset-chip" onclick="setPreset('Fix division by zero error handling in math module')">Division by Zero</span>
-              <span class="preset-chip" onclick="setPreset('Update greeting function to capitalize names')">Greeting Caps</span>
+              <span class="preset-chip" onclick="setPreset('test_calculator.py::test_add_negative fails: add(-2, -3) returns 5 instead of -5. Fix add() in calculator.py so negative addition works and all tests pass.')">Calculator Negatives</span>
+              <span class="preset-chip" onclick="setPreset('test_calculator.py::test_div_zero fails: dividing by zero raises an unclear error. Handle division by zero gracefully and make the tests pass.')">Division by Zero</span>
+              <span class="preset-chip" onclick="setPreset('test_history.py::test_history_trap fails: the history log records the wrong operand order. Fix the history() function so the tests pass.')">History Trap</span>
             </div>
 
             <div class="form-group">
@@ -518,61 +603,19 @@
             </div>
 
             <button class="btn btn-primary" id="launchBtn" onclick="launchTask()">
-              <span>Run Autonomous Pipeline</span>
+              <span id="launchBtnContent">Run Autonomous Pipeline</span>
             </button>
+
+            <div class="run-result" id="runResult"></div>
           </div>
         </div>
 
         <div class="panel">
           <div class="panel-header">
             <span>🤖 Agent Roster</span>
-            <span class="badge badge-active">6 Agents</span>
+            <span class="badge badge-active" id="agentCount">…</span>
           </div>
-          <div class="panel-body" style="padding: 12px; gap: 8px;">
-            <div class="agent-item">
-              <div class="agent-info">
-                <div class="agent-avatar">👑</div>
-                <div>
-                  <div class="agent-name">Architect</div>
-                  <div class="agent-role">Decomposition & Strategy</div>
-                </div>
-              </div>
-              <span class="badge badge-idle" id="agent-architect">Ready</span>
-            </div>
-
-            <div class="agent-item">
-              <div class="agent-info">
-                <div class="agent-avatar">🧭</div>
-                <div>
-                  <div class="agent-name">Manager</div>
-                  <div class="agent-role">Task Routing & Governor</div>
-                </div>
-              </div>
-              <span class="badge badge-idle" id="agent-manager">Ready</span>
-            </div>
-
-            <div class="agent-item">
-              <div class="agent-info">
-                <div class="agent-avatar">💻</div>
-                <div>
-                  <div class="agent-name">SDE Specialist 1</div>
-                  <div class="agent-role">Implementation & Patches</div>
-                </div>
-              </div>
-              <span class="badge badge-idle" id="agent-sde-1">Ready</span>
-            </div>
-
-            <div class="agent-item">
-              <div class="agent-info">
-                <div class="agent-avatar">🧪</div>
-                <div>
-                  <div class="agent-name">Verifier</div>
-                  <div class="agent-role">5-Stage Verification Gate</div>
-                </div>
-              </div>
-              <span class="badge badge-idle" id="agent-verifier">Ready</span>
-            </div>
-          </div>
+          <div class="panel-body" style="padding: 12px; gap: 8px;" id="agentRoster"></div>
         </div>
       </div>
 
@@ -595,7 +638,7 @@
         <div class="panel">
           <div class="panel-header">
             <span>🧪 Verification Pipeline</span>
-            <span style="font-size: 0.75rem; color: var(--text-dim);">Stages 1–5</span>
+            <span style="font-size: 0.75rem; color: var(--text-dim);">Stages 1–6</span>
           </div>
           <div class="panel-body" style="padding: 12px; gap: 8px;">
             <div class="stage-item">
@@ -611,12 +654,16 @@
               <span class="badge badge-idle" id="stage-tests">Pending</span>
             </div>
             <div class="stage-item">
-              <span class="stage-title">4. AST Smells Check</span>
-              <span class="badge badge-idle" id="stage-smells">Pending</span>
+              <span class="stage-title">4. Code Review</span>
+              <span class="badge badge-idle" id="stage-review">Pending</span>
             </div>
             <div class="stage-item">
-              <span class="stage-title">5. Regressions Gate</span>
-              <span class="badge badge-idle" id="stage-regression">Pending</span>
+              <span class="stage-title">5. Security Scan</span>
+              <span class="badge badge-idle" id="stage-security">Pending</span>
+            </div>
+            <div class="stage-item">
+              <span class="stage-title">6. Final Review</span>
+              <span class="badge badge-idle" id="stage-final">Pending</span>
             </div>
           </div>
         </div>
@@ -640,15 +687,129 @@
   </footer>
 
   <script>
+    // Foreman Cockpit — fixed wiring:
+    // - agent roster rendered from GET /api/agents (fallback to eval defaults)
+    // - verification stages driven by `verification.stage` events (6 real stages)
+    // - token meter driven by `tokens.usage` events (cumulative, set not add)
+    // - one run id everywhere (gateway threads it through the pipeline)
+    // - launch results + evidence links + patch diff surfaced in the UI
     let socket = null;
     let eventCount = 0;
-    let totalTokens = 0;
-    let activeRunId = '—';
+    let activeRunId = null;
 
+    // ---- agent roster -------------------------------------------------------
+    const ROLE_META = {
+      architect:   { icon: '👑', name: 'Architect',   sub: 'Decomposition & Strategy' },
+      manager:     { icon: '🧭', name: 'Manager',     sub: 'Task Routing & Budget Governor' },
+      locator:     { icon: '🔍', name: 'Locator',     sub: 'File & Symbol Localization' },
+      implementer: { icon: '💻', name: 'Implementer', sub: 'Code Changes & Patches' },
+      verifier:    { icon: '🧪', name: 'Verifier',    sub: '6-Stage Verification Gate' },
+    };
+    // Fallback = the five eval-mode roles from harness.yaml.
+    const DEFAULT_AGENTS = [
+      { agent_id: 'architect-1', role: 'architect' },
+      { agent_id: 'mgr-1', role: 'manager' },
+      { agent_id: 'locator-1', role: 'locator' },
+      { agent_id: 'impl-1', role: 'implementer' },
+      { agent_id: 'ver-1', role: 'verifier' },
+    ];
+
+    function renderAgents(agents) {
+      const roster = document.getElementById('agentRoster');
+      document.getElementById('agentCount').textContent = agents.length + ' Agents';
+      roster.innerHTML = '';
+      for (const agent of agents) {
+        const meta = ROLE_META[agent.role] || { icon: '🔧', name: agent.role, sub: agent.agent_id };
+        const item = document.createElement('div');
+        item.className = 'agent-item';
+        item.innerHTML = `
+          <div class="agent-info">
+            <div class="agent-avatar">${meta.icon}</div>
+            <div>
+              <div class="agent-name">${meta.name} <span class="agent-id">${agent.agent_id}</span></div>
+              <div class="agent-role">${meta.sub}</div>
+            </div>
+          </div>
+          <span class="badge badge-idle" id="agent-${agent.agent_id}">Ready</span>`;
+        roster.appendChild(item);
+      }
+    }
+
+    async function fetchAgents() {
+      try {
+        const response = await fetch('/api/agents');
+        if (!response.ok) throw new Error('agents endpoint ' + response.status);
+        const body = await response.json();
+        if (Array.isArray(body.agents) && body.agents.length) {
+          renderAgents(body.agents);
+          return;
+        }
+      } catch (err) {
+        console.warn('agent roster fallback:', err.message);
+      }
+      renderAgents(DEFAULT_AGENTS);
+    }
+
+    // ---- helpers -------------------------------------------------------------
     function setPreset(text) {
       document.getElementById('issueInput').value = text;
     }
 
+    function setAgentStatus(agentId, text, badgeClass) {
+      const el = document.getElementById('agent-' + agentId);
+      if (!el) return;
+      el.textContent = text;
+      el.className = `badge ${badgeClass}`;
+    }
+
+    function resetAgents() {
+      document.querySelectorAll('#agentRoster .badge').forEach((el) => {
+        el.textContent = 'Ready';
+        el.className = 'badge badge-idle';
+      });
+    }
+
+    function setStageStatus(id, ok) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = ok ? 'Passed' : 'Failed';
+      el.className = `badge ${ok ? 'badge-done' : 'badge-fail'}`;
+    }
+
+    function resetStages() {
+      ['stage-integrity', 'stage-syntax', 'stage-tests', 'stage-review', 'stage-security', 'stage-final']
+        .forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) { el.textContent = 'Pending'; el.className = 'badge badge-idle'; }
+        });
+    }
+
+    // Maps a pipeline stage name ("1-integrity", "2-self-check", ...) onto the
+    // badge id. Names come from verification/pipeline.py stage results.
+    function stageBadgeId(stageName) {
+      const name = String(stageName || '').toLowerCase();
+      if (name.includes('integrity')) return 'stage-integrity';
+      if (name.includes('self-check') || name.includes('syntax')) return 'stage-syntax';
+      if (name.includes('local-tests') || name.includes('test')) return 'stage-tests';
+      if (name.includes('review') && !name.includes('final')) return 'stage-review';
+      if (name.includes('security') || name.includes('secret')) return 'stage-security';
+      if (name.includes('final')) return 'stage-final';
+      return null;
+    }
+
+    function setPipelineState(text, color) {
+      const el = document.getElementById('metricStatus');
+      el.textContent = text;
+      el.style.color = color;
+    }
+
+    function escapeHtml(value) {
+      const div = document.createElement('div');
+      div.textContent = String(value);
+      return div.innerHTML;
+    }
+
+    // ---- WebSocket -----------------------------------------------------------
     function connectWS() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.host || 'localhost:8080';
@@ -691,6 +852,7 @@
       connectWS();
     }
 
+    // ---- event handling ------------------------------------------------------
     function handleIncomingEvent(raw) {
       let data = {};
       try {
@@ -708,63 +870,144 @@
         document.getElementById('metricRunId').textContent = activeRunId;
       }
 
-      if (data.usage && data.usage.total_tokens) {
-        totalTokens += parseInt(data.usage.total_tokens, 10);
-        document.getElementById('metricTokens').textContent = totalTokens.toLocaleString();
+      if (data.usage && data.usage.total_tokens !== undefined) {
+        // Cumulative totals from the engine: SET, never accumulate.
+        document.getElementById('metricTokens').textContent =
+          Number(data.usage.total_tokens).toLocaleString();
       }
 
-      // Add to Activity Feed
       renderEventToFeed(data);
 
-      // React to specific event types
       const evName = data.event || '';
+
       if (evName === 'run.start') {
-        document.getElementById('metricStatus').textContent = 'RUNNING';
-        document.getElementById('metricStatus').style.color = '#38bdf8';
-        setAgentStatus('agent-architect', 'Planning', 'badge-active');
+        setPipelineState('RUNNING', '#38bdf8');
+        resetStages();
+        resetAgents();
+        setAgentStatus('architect-1', 'Planning', 'badge-active');
+      } else if (evName === 'architect.plan') {
+        setAgentStatus('architect-1', 'Planned', 'badge-done');
+        setAgentStatus('mgr-1', 'Routing', 'badge-active');
       } else if (evName === 'specialist.assigned') {
-        setAgentStatus('agent-manager', 'Assigning', 'badge-active');
-        setAgentStatus('agent-sde-1', 'Coding', 'badge-active');
+        setAgentStatus('mgr-1', 'Routing', 'badge-active');
+        if (data.agent) setAgentStatus(data.agent, 'Working', 'badge-active');
       } else if (evName === 'specialist.result') {
         const ok = data.success !== false;
-        setAgentStatus('agent-sde-1', ok ? 'Completed' : 'Retrying', ok ? 'badge-done' : 'badge-fail');
-      } else if (evName === 'verification.stage') {
-        setAgentStatus('agent-verifier', 'Verifying', 'badge-active');
-        const stName = (data.stage || '').toLowerCase();
-        const ok = data.passed !== false;
-        if (stName.includes('integrity')) setStageStatus('stage-integrity', ok);
-        if (stName.includes('syntax')) setStageStatus('stage-syntax', ok);
-        if (stName.includes('test')) setStageStatus('stage-tests', ok);
-        if (stName.includes('smell')) setStageStatus('stage-smells', ok);
-        if (stName.includes('regression')) setStageStatus('stage-regression', ok);
-      } else if (evName === 'run.end' || evName === 'task.completed') {
-        const ok = data.success !== false && (data.result ? data.result.success !== false : true);
-        document.getElementById('metricStatus').textContent = ok ? 'SUCCESS' : 'FINISHED';
-        document.getElementById('metricStatus').style.color = ok ? '#34d399' : '#f87171';
-        setAgentStatus('agent-architect', 'Ready', 'badge-idle');
-        setAgentStatus('agent-manager', 'Ready', 'badge-idle');
-        setAgentStatus('agent-sde-1', 'Ready', 'badge-idle');
-        setAgentStatus('agent-verifier', 'Done', 'badge-done');
-        
-        // If result has patch or outcome
-        if (data.result && data.result.outcome) {
-          document.getElementById('diffStatus').textContent = data.result.outcome;
+        if (data.task) {
+          // attribute the result to whichever agent handled the task
+          const assigned = lastAssignedFor(data.task);
+          if (assigned) setAgentStatus(assigned, ok ? 'Completed' : 'Failed', ok ? 'badge-done' : 'badge-fail');
         }
+      } else if (evName === 'verification.stage') {
+        setAgentStatus('ver-1', 'Verifying', 'badge-active');
+        const badgeId = stageBadgeId(data.stage);
+        if (badgeId) setStageStatus(badgeId, data.passed !== false);
+      } else if (evName === 'tokens.usage') {
+        // handled above (meter set)
+      } else if (evName === 'task.completed') {
+        const ok = data.result ? data.result.success !== false : true;
+        finishRun(ok, data.result || {});
+      } else if (evName === 'run.end') {
+        const ok = data.success !== false;
+        finishRun(ok, null);
       }
     }
 
-    function setAgentStatus(id, text, badgeClass) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.textContent = text;
-      el.className = `badge ${badgeClass}`;
+    const assignmentByTask = {};
+    function lastAssignedFor(taskId) {
+      return assignmentByTask[taskId] || null;
     }
 
-    function setStageStatus(id, ok) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.textContent = ok ? 'Passed' : 'Failed';
-      el.className = `badge ${ok ? 'badge-done' : 'badge-fail'}`;
+    function finishRun(ok, result) {
+      setPipelineState(ok ? 'SUCCESS' : 'FAILED', ok ? '#34d399' : '#f87171');
+      resetAgents();
+      const verifierBadge = document.getElementById('agent-ver-1');
+      if (verifierBadge) {
+        verifierBadge.textContent = ok ? 'Verified' : 'Rejected';
+        verifierBadge.className = `badge ${ok ? 'badge-done' : 'badge-fail'}`;
+      }
+      if (result && result.outcome) {
+        const box = document.getElementById('diffBox');
+        const status = document.getElementById('diffStatus');
+        if (status) status.textContent = result.outcome;
+      }
+      if (activeRunId) loadDiff(activeRunId);
+    }
+
+    // ---- event feed rendering ------------------------------------------------
+    function feedClassFor(data) {
+      const evName = data.event || '';
+      if (evName === 'run.start') return 'event-run-start';
+      if (evName === 'architect.profile' || evName === 'architect.plan' || evName === 'baseline.captured') return 'event-plan';
+      if (evName === 'specialist.assigned' || evName === 'specialist.collaborator_added') return 'event-specialist';
+      if (evName === 'specialist.result') return data.success ? 'event-specialist-result-ok' : 'event-specialist-result-fail';
+      if (evName === 'verification.stage') return data.passed !== false ? 'event-verification-pass' : 'event-verification-fail';
+      if (evName === 'tokens.usage') return 'event-tokens';
+      if (evName.startsWith('recovery.')) return 'event-recovery';
+      if (evName === 'run.end') return data.success ? 'event-run-end-ok' : 'event-run-end-fail';
+      if (evName === 'task.completed') {
+        const ok = data.result ? data.result.success !== false : true;
+        return ok ? 'event-run-end-ok' : 'event-run-end-fail';
+      }
+      return '';
+    }
+
+    function describeEvent(data) {
+      const evName = data.event || 'engine.event';
+      const icons = {
+        'run.start': '▶', 'run.end': '■', 'architect.profile': '🏛', 'architect.plan': '🗺',
+        'baseline.captured': '📏', 'specialist.assigned': '🛠', 'specialist.result': '✓',
+        'specialist.collaborator_added': '👥', 'verification.stage': '🧪', 'tokens.usage': '⚡',
+        'task.completed': '🏁',
+      };
+      const icon = icons[evName] || '•';
+
+      let detail = '';
+      if (evName === 'run.start') {
+        detail = data.issue ? `Issue: "${String(data.issue).slice(0, 160)}"` : 'run started';
+      } else if (evName === 'architect.profile') {
+        const profile = data.profile || {};
+        const langs = (profile.languages || []).join(', ') || '?';
+        detail = `Repo profile — languages: ${langs}, build: ${profile.build_system || 'n/a'}`;
+      } else if (evName === 'architect.plan') {
+        const subtasks = data.subtasks || [];
+        detail = subtasks.length
+          ? `Plan: ${subtasks.length} subtask(s) — ${subtasks.join(', ')}`
+          : 'Plan: no subtasks emitted';
+      } else if (evName === 'baseline.captured') {
+        detail = `Baseline: runnable=${data.runnable}, pre-existing failures: ${data.pre_existing_failures}`;
+      } else if (evName === 'specialist.assigned') {
+        if (data.task) assignmentByTask[data.task] = data.agent;
+        detail = `Task ${data.task || '?'} assigned to ${data.agent || '?'}`;
+      } else if (evName === 'specialist.result') {
+        const status = data.success ? 'completed' : 'FAILED';
+        detail = `Task ${data.task || '?'} ${status}: ${String(data.summary || '').slice(0, 180)}`;
+      } else if (evName === 'specialist.collaborator_added') {
+        detail = `Collaborator ${data.agent} spawned for ${data.for}`;
+      } else if (evName === 'verification.stage') {
+        const verdict = data.passed !== false ? 'PASS' : 'FAIL';
+        detail = `Stage ${data.stage}: ${verdict} — ${String(data.detail || '').slice(0, 140)}`;
+      } else if (evName === 'tokens.usage') {
+        const usage = data.usage || {};
+        detail = `Tokens so far: ${Number(usage.total_tokens || 0).toLocaleString()} ` +
+          `(prompt ${Number(usage.prompt_tokens || 0).toLocaleString()} + completion ${Number(usage.completion_tokens || 0).toLocaleString()}) — mode: ${data.governor_mode || 'normal'}`;
+      } else if (evName === 'recovery.l1_retry') {
+        detail = `L1 self-repair attempt ${data.attempt} for ${data.task} (${data.error_type || 'error'})`;
+      } else if (evName === 'recovery.l2_reroute') {
+        detail = `L2 re-route for ${data.task}`;
+      } else if (evName === 'recovery.l2_guidance') {
+        detail = `L2 manager guidance for ${data.task}`;
+      } else if (evName === 'recovery.l3_replan') {
+        detail = `L3 architect re-plan for ${data.task}`;
+      } else if (evName === 'run.end') {
+        detail = data.success ? 'Run finished successfully' : 'Run finished with failures';
+      } else if (evName === 'task.completed') {
+        const outcome = data.result ? (data.result.outcome || 'finished') : 'finished';
+        detail = `Outcome: ${outcome}`;
+      } else {
+        detail = JSON.stringify(data);
+      }
+      return { icon, evName, detail };
     }
 
     function renderEventToFeed(data) {
@@ -775,68 +1018,132 @@
 
       const card = document.createElement('div');
       const timeStr = new Date().toLocaleTimeString();
-      const evName = data.event || 'engine.event';
+      const { icon, evName, detail } = describeEvent(data);
 
-      let cssClass = 'event-card';
-      if (evName === 'run.start') cssClass += ' event-run-start';
-      if (evName.includes('result') && data.success) cssClass += ' event-specialist-result-ok';
-      if (evName.includes('result') && !data.success) cssClass += ' event-specialist-result-fail';
-      if (evName.includes('verification')) cssClass += ' event-verification';
-
-      card.className = cssClass;
-
-      let detail = '';
-      if (data.task) detail += `Task: ${data.task} `;
-      if (data.summary) detail += `— ${data.summary} `;
-      if (data.issue) detail += `Issue: "${data.issue.substring(0, 100)}..." `;
-      if (data.detail) detail += `— ${data.detail} `;
-      if (data.result) detail += `Outcome: ${data.result.outcome || JSON.stringify(data.result)} `;
-      if (!detail) detail = JSON.stringify(data);
-
+      card.className = 'event-card ' + feedClassFor(data);
       card.innerHTML = `
         <div class="event-meta">
-          <span>[${timeStr}] <strong>${evName}</strong></span>
-          <span>${data.run_id || activeRunId}</span>
+          <span>[${timeStr}] <strong>${icon} ${escapeHtml(evName)}</strong></span>
+          <span>${escapeHtml(data.run_id || activeRunId || '—')}</span>
         </div>
-        <div class="event-detail">${detail}</div>
-      `;
+        <div class="event-detail">${escapeHtml(detail)}</div>`;
 
       feed.insertBefore(card, feed.firstChild);
+    }
+
+    // ---- patch diff ----------------------------------------------------------
+    async function loadDiff(runId) {
+      const box = document.getElementById('diffBox');
+      const status = document.getElementById('diffStatus');
+      try {
+        const response = await fetch(`/api/evidence/${encodeURIComponent(runId)}/file/patch.diff`);
+        const body = await response.json();
+        if (!body.found) {
+          box.textContent = body.content || 'No patch produced for this run (empty diff).';
+          if (status) status.textContent = 'No patch';
+          return;
+        }
+        const diffText = body.content || '';
+        if (status) status.textContent = `run ${runId}`;
+        renderDiff(box, diffText);
+      } catch (err) {
+        box.textContent = 'Could not load patch: ' + err.message;
+      }
+    }
+
+    function renderDiff(box, diffText) {
+      box.innerHTML = '';
+      if (!diffText.trim()) {
+        box.textContent = 'Empty diff — no file changes in this run.';
+        return;
+      }
+      const lines = diffText.split('\n');
+      const MAX_LINES = 400;
+      for (const line of lines.slice(0, MAX_LINES)) {
+        const div = document.createElement('div');
+        if (line.startsWith('+++') || line.startsWith('---')) div.className = 'diff-file';
+        else if (line.startsWith('@@')) div.className = 'diff-hunk';
+        else if (line.startsWith('+')) div.className = 'diff-add';
+        else if (line.startsWith('-')) div.className = 'diff-del';
+        div.textContent = line || ' ';
+        box.appendChild(div);
+      }
+      if (lines.length > MAX_LINES) {
+        const note = document.createElement('div');
+        note.style.color = 'var(--text-dim)';
+        note.textContent = `… ${lines.length - MAX_LINES} more lines truncated (full diff in evidence pack)`;
+        box.appendChild(note);
+      }
+    }
+
+    // ---- task launching ------------------------------------------------------
+    function evidenceLinks(runId) {
+      const links = ['patch.diff', 'test-report.md', 'summary.md', 'token-report.json'];
+      return links.map((name) =>
+        `<a class="evidence-link" target="_blank" rel="noopener" ` +
+        `href="/api/evidence/${encodeURIComponent(runId)}/file/${name}">${name}</a>`
+      ).join('');
+    }
+
+    function showRunResult(ok, runId, outcome, detail) {
+      const banner = document.getElementById('runResult');
+      banner.className = 'run-result visible ' + (ok ? 'ok' : 'fail');
+      banner.innerHTML = `
+        <div class="outcome-line">${ok ? '✅' : '❌'} ${escapeHtml(outcome)}</div>
+        <div class="meta-line">run ${escapeHtml(runId || '—')}</div>
+        ${detail ? `<div class="event-detail">${escapeHtml(detail)}</div>` : ''}
+        <div class="evidence-links">${runId ? evidenceLinks(runId) : ''}</div>`;
     }
 
     async function launchTask() {
       const issue = document.getElementById('issueInput').value.trim();
       const repoRoot = document.getElementById('repoInput').value.trim() || 'fixtures/mini-repo';
       const btn = document.getElementById('launchBtn');
+      const btnContent = document.getElementById('launchBtnContent');
 
       if (!issue) {
-        alert('Please enter an issue description.');
+        showRunResult(false, null, 'Missing issue', 'Enter an issue description before launching the pipeline.');
         return;
       }
 
       btn.disabled = true;
-      btn.innerHTML = '<span>Launching run...</span>';
+      btnContent.textContent = 'Pipeline running — watch the stream →';
 
       try {
         const response = await fetch('/api/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ issue: issue, repo_root: repoRoot })
+          body: JSON.stringify({ issue: issue, repo_root: repoRoot }),
         });
+        const body = await response.json().catch(() => ({}));
 
-        const result = await response.json();
-        console.log('Task launched:', result);
+        if (!response.ok) {
+          const detail = body.error || body.detail || `gateway answered ${response.status}`;
+          showRunResult(false, null, 'Launch failed', detail);
+          setPipelineState('FAILED', '#f87171');
+        } else {
+          const result = body.result || {};
+          showRunResult(
+            result.success !== false,
+            body.run_id || result.run_id,
+            result.outcome || 'Run finished',
+            (result.flags || []).join(' · ')
+          );
+          if (body.run_id) loadDiff(body.run_id);
+        }
       } catch (err) {
-        console.error('Failed to launch task:', err);
-        alert('Task launch request failed: ' + err.message);
+        showRunResult(false, null, 'Launch failed', err.message + ' — is the gateway (and orchestrator) running?');
+        setPipelineState('FAILED', '#f87171');
       } finally {
         btn.disabled = false;
-        btn.innerHTML = '<span>Run Autonomous Pipeline</span>';
+        btnContent.textContent = 'Run Autonomous Pipeline';
       }
     }
 
     // Initialize on load
     window.addEventListener('DOMContentLoaded', () => {
+      renderAgents(DEFAULT_AGENTS);
+      fetchAgents();
       connectWS();
     });
   </script>

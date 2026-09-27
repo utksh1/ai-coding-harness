@@ -48,7 +48,14 @@ class RedisEventPublisher:
         return None
 
     def publish(self, run_id: str, event: dict[str, Any]) -> None:
-        """Publish one event to Redis (if configured) and broadcast to Gateway API."""
+        """Publish one event to Redis (if configured) and, when
+        GATEWAY_EVENTS_URL is set, POST it to the gateway's ingest route.
+
+        The direct push is opt-in on purpose: a hard-coded localhost default
+        made every unit test fire real HTTP calls at whatever gateway
+        happened to be listening (event pollution, flaky latency, and a
+        broken offline/eval guarantee). Deployments set the variable - see
+        platform/docker-compose.yml - and tests inject fakes."""
         client = self._resolved()
         if client is not None:
             channel = f"{CHANNEL_PREFIX}.{run_id}"
@@ -57,7 +64,9 @@ class RedisEventPublisher:
             except Exception as exc:
                 logger.warning("redis publish failed", channel=channel, error=str(exc)[:200])
 
-        gateway_url = os.environ.get("GATEWAY_EVENTS_URL", "http://localhost:8080/api/events")
+        gateway_url = os.environ.get("GATEWAY_EVENTS_URL")
+        if not gateway_url:
+            return
         try:
             import urllib.request
 

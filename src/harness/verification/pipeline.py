@@ -27,6 +27,9 @@ from harness.verification.baseline import Baseline, parse_failed_tests
 from harness.verification.code_review import review_paths
 from harness.verification.integrity import classify_diff
 
+Tracer = Callable[[dict[str, Any]], None]
+"""Optional event sink (the evidence pack's trace) for live stage events."""
+
 
 @dataclass
 class StageResult:
@@ -39,8 +42,38 @@ class StageResult:
 
 
 def _reproduction_node(raw: str) -> str:
-    """Bare pytest node id: architects sometimes emit 'pytest node::id' (#81)."""
-    return raw.split(maxsplit=1)[1] if raw.startswith("pytest ") else raw
+    """Bare pytest node id: architects emit 'pytest node::id' but also full
+    command lines with flags ('pytest test.py -v', 'python -m pytest -k x
+    test.py') (#81). Tokenize the command and keep the first path-like
+    argument; flags and their values are never paths."""
+
+    def strip_runner(tokens: list[str]) -> list[str]:
+        # 'python -m pytest ...' / 'python3 -m pytest ...' / 'pytest ...'
+        is_module_run = (
+            len(tokens) >= 3
+            and tokens[0] in {"python", "python3"}
+            and tokens[1] == "-m"
+            and tokens[2] == "pytest"
+        )
+        if is_module_run:
+            return tokens[3:]
+        if tokens and tokens[0] == "pytest":
+            return tokens[1:]
+        return tokens
+
+    value_flags = {"-k", "-m", "--tb", "--maxfail", "--junitxml", "--junit-xml", "-p", "--rootdir"}
+    tokens = strip_runner([t for t in raw.strip().split() if t])
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in value_flags:
+            i += 2  # flag plus its value
+            continue
+        if tok.startswith("-"):
+            i += 1  # boolean flag (possibly --opt=value)
+            continue
+        return tok
+    return ""
 
 
 class VerificationPipeline:
@@ -66,8 +99,16 @@ class VerificationPipeline:
         plan: Plan | None,
         architect: ArchitectAgent | None = None,
         baseline: Baseline | None = None,
+        run_id: str | None = None,
+        tracer: Tracer | None = None,
     ) -> list[StageResult]:
-        """Execute stages 1-6 in order; stops at the first blocking failure."""
+        """Execute stages 1-6 in order; stops at the first blocking failure.
+
+        With `run_id` + `tracer`, every stage outcome is also emitted as a
+        `verification.stage` event (platform cockpit streaming) and lands in
+        the run's trace.jsonl — the evidence pack gains the verification
+        timeline, and the dashboard's stage panel becomes live.
+        """
         self.results = []
         stages: tuple[Callable[..., Awaitable[StageResult]], ...] = (
             self._stage_integrity,
@@ -79,15 +120,32 @@ class VerificationPipeline:
         )
         for stage in stages:
             if self.cancelled:
-                self.results.append(
-                    StageResult(name="cancelled", passed=False, detail="pipeline cancelled")
-                )
+                result = StageResult(name="cancelled", passed=False, detail="pipeline cancelled")
+                self.results.append(result)
+                self._emit_stage(tracer, run_id, result)
                 break
             result = await _timed(stage, diff, plan, architect)
             self.results.append(result)
+            self._emit_stage(tracer, run_id, result)
             if not result.passed and result.blocking:
                 break
         return self.results
+
+    def _emit_stage(self, tracer: Tracer | None, run_id: str | None, result: StageResult) -> None:
+        """Trace one stage outcome when the platform wiring is present."""
+        if tracer is None or run_id is None:
+            return
+        tracer(
+            {
+                "event": "verification.stage",
+                "run_id": run_id,
+                "stage": result.name,
+                "passed": result.passed,
+                "blocking": result.blocking,
+                "detail": result.detail[:300],
+                "duration_seconds": result.duration_seconds,
+            }
+        )
 
     # -- stages ---------------------------------------------------------------
     async def _stage_integrity(

@@ -59,6 +59,13 @@ class AuditLog:
             "detail": detail or {},
         }
         with self._lock:
+            # The log directory may have been removed after construction
+            # (long-lived orchestrator, target repo cleaned between runs):
+            # recreate it and start a fresh chain - an append must never
+            # crash the run (Errno 2 on open("a") without the parent dir).
+            if not self._path.exists():
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                self._prev_hash = GENESIS
             entry["prev_hash"] = self._prev_hash
             entry["entry_hash"] = _digest(
                 {k: v for k, v in entry.items() if k not in {"prev_hash", "entry_hash"}},
