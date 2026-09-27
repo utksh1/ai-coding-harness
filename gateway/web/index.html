@@ -1,1151 +1,1918 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Foreman Cockpit — AI Coding Harness</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --bg: #080b11;
-      --surface: #0f1523;
-      --surface-hover: #151d30;
-      --card-bg: rgba(16, 23, 38, 0.7);
-      --card-border: rgba(255, 255, 255, 0.08);
-      --border-focus: #3b82f6;
-      --text: #f1f5f9;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-      --primary: #3b82f6;
-      --primary-glow: rgba(59, 130, 246, 0.25);
-      --accent: #8b5cf6;
-      --success: #10b981;
-      --success-glow: rgba(16, 185, 129, 0.2);
-      --warning: #f59e0b;
-      --error: #ef4444;
-      --code-bg: #070a10;
-      --radius: 12px;
-      --radius-sm: 8px;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    body {
-      background-color: var(--bg);
-      background-image:
-        radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.08) 0px, transparent 50%),
-        radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.06) 0px, transparent 50%);
-      color: var(--text);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      line-height: 1.5;
-    }
-
-    header {
-      background: rgba(11, 16, 27, 0.85);
-      backdrop-filter: blur(12px);
-      border-bottom: 1px solid var(--card-border);
-      padding: 12px 24px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      position: sticky;
-      top: 0;
-      z-index: 50;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-weight: 700;
-      font-size: 1.15rem;
-      letter-spacing: -0.02em;
-    }
-
-    .brand-icon {
-      width: 32px;
-      height: 32px;
-      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #fff;
-      font-weight: 800;
-      box-shadow: 0 0 16px var(--primary-glow);
-    }
-
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 4px 12px;
-      border-radius: 9999px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--card-border);
-    }
-
-    .pulse {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--error);
-      box-shadow: 0 0 8px var(--error);
-      transition: all 0.3s ease;
-    }
-
-    .pulse.connected {
-      background: var(--success);
-      box-shadow: 0 0 10px var(--success);
-      animation: pulse-glow 2s infinite;
-    }
-
-    @keyframes pulse-glow {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.6; transform: scale(1.15); }
-    }
-
-    .nav-actions {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      padding: 8px 16px;
-      border-radius: var(--radius-sm);
-      font-size: 0.875rem;
-      font-weight: 600;
-      cursor: pointer;
-      border: none;
-      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-
-    .btn-primary {
-      background: linear-gradient(135deg, #2563eb, #3b82f6);
-      color: #ffffff;
-      box-shadow: 0 2px 10px var(--primary-glow);
-    }
-
-    .btn-primary:hover {
-      background: linear-gradient(135deg, #1d4ed8, #2563eb);
-      transform: translateY(-1px);
-      box-shadow: 0 4px 16px var(--primary-glow);
-    }
-
-    .btn-primary:disabled {
-      opacity: 0.65;
-      cursor: progress;
-      transform: none;
-    }
-
-    .btn-secondary {
-      background: var(--surface);
-      color: var(--text);
-      border: 1px solid var(--card-border);
-    }
-
-    .btn-secondary:hover {
-      background: var(--surface-hover);
-      border-color: rgba(255, 255, 255, 0.15);
-    }
-
-    .spinner {
-      width: 14px;
-      height: 14px;
-      border: 2px solid rgba(255, 255, 255, 0.25);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    main {
-      flex: 1;
-      padding: 24px;
-      max-width: 1600px;
-      margin: 0 auto;
-      width: 100%;
-      display: flex;
-      flex-direction: column;
-      gap: 24px;
-    }
-
-    /* Metrics Ribbon */
-    .metrics-ribbon {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
-    }
-
-    .metric-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: var(--radius);
-      padding: 16px;
-      backdrop-filter: blur(8px);
-      transition: border-color 0.2s;
-    }
-
-    .metric-card:hover {
-      border-color: rgba(255, 255, 255, 0.15);
-    }
-
-    .metric-title {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--text-dim);
-      margin-bottom: 6px;
-    }
-
-    .metric-value {
-      font-size: 1.5rem;
-      font-weight: 700;
-      color: var(--text);
-      font-family: 'Fira Code', monospace;
-    }
-
-    /* Grid Layout */
-    .dashboard-grid {
-      display: grid;
-      grid-template-columns: 360px 1fr 400px;
-      gap: 24px;
-      align-items: start;
-    }
-
-    @media (max-width: 1200px) {
-      .dashboard-grid {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .panel {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: var(--radius);
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      backdrop-filter: blur(8px);
-    }
-
-    .panel-header {
-      padding: 16px 20px;
-      border-bottom: 1px solid var(--card-border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-weight: 600;
-      font-size: 0.95rem;
-      background: rgba(255, 255, 255, 0.02);
-    }
-
-    .panel-body {
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    /* Task Launcher Form */
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    label {
-      font-size: 0.8rem;
-      font-weight: 600;
-      color: var(--text-muted);
-    }
-
-    input[type="text"], textarea {
-      width: 100%;
-      background: var(--surface);
-      border: 1px solid var(--card-border);
-      border-radius: var(--radius-sm);
-      padding: 10px 14px;
-      color: var(--text);
-      font-family: inherit;
-      font-size: 0.9rem;
-      transition: all 0.2s;
-    }
-
-    input[type="text"]:focus, textarea:focus {
-      outline: none;
-      border-color: var(--border-focus);
-      box-shadow: 0 0 0 2px var(--primary-glow);
-    }
-
-    textarea {
-      min-height: 90px;
-      resize: vertical;
-    }
-
-    .presets {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-
-    .preset-chip {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--card-border);
-      padding: 4px 10px;
-      border-radius: 9999px;
-      font-size: 0.75rem;
-      cursor: pointer;
-      color: var(--text-muted);
-      transition: all 0.2s;
-    }
-
-    .preset-chip:hover {
-      background: rgba(59, 130, 246, 0.15);
-      border-color: var(--primary);
-      color: #fff;
-    }
-
-    /* Run result banner */
-    .run-result {
-      display: none;
-      border-radius: var(--radius-sm);
-      padding: 12px 14px;
-      font-size: 0.85rem;
-      border: 1px solid var(--card-border);
-      background: var(--surface);
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .run-result.visible { display: flex; }
-
-    .run-result.ok {
-      border-color: rgba(16, 185, 129, 0.4);
-      background: rgba(16, 185, 129, 0.08);
-    }
-
-    .run-result.fail {
-      border-color: rgba(239, 68, 68, 0.4);
-      background: rgba(239, 68, 68, 0.08);
-    }
-
-    .run-result .outcome-line { font-weight: 600; }
-
-    .run-result .meta-line {
-      color: var(--text-dim);
-      font-size: 0.75rem;
-      font-family: 'Fira Code', monospace;
-    }
-
-    .evidence-links { display: flex; flex-wrap: wrap; gap: 6px; }
-
-    .evidence-link {
-      font-size: 0.72rem;
-      padding: 3px 10px;
-      border-radius: 9999px;
-      border: 1px solid var(--card-border);
-      color: #60a5fa;
-      text-decoration: none;
-      transition: all 0.2s;
-    }
-
-    .evidence-link:hover {
-      border-color: var(--primary);
-      background: rgba(59, 130, 246, 0.15);
-    }
-
-    /* Agent Roster */
-    .agent-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 10px 12px;
-      background: var(--surface);
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--card-border);
-    }
-
-    .agent-info {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .agent-avatar {
-      width: 28px;
-      height: 28px;
-      border-radius: 6px;
-      background: #1e293b;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0.8rem;
-    }
-
-    .agent-name {
-      font-size: 0.85rem;
-      font-weight: 600;
-    }
-
-    .agent-name .agent-id {
-      font-weight: 400;
-      color: var(--text-dim);
-      font-size: 0.7rem;
-      font-family: 'Fira Code', monospace;
-    }
-
-    .agent-role {
-      font-size: 0.7rem;
-      color: var(--text-dim);
-    }
-
-    .badge {
-      font-size: 0.7rem;
-      font-weight: 600;
-      padding: 2px 8px;
-      border-radius: 4px;
-      text-transform: uppercase;
-      white-space: nowrap;
-    }
-
-    .badge-idle { background: rgba(148, 163, 184, 0.1); color: var(--text-muted); }
-    .badge-active { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
-    .badge-done { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-    .badge-fail { background: rgba(239, 68, 68, 0.15); color: #f87171; }
-
-    /* Activity Stream */
-    .activity-feed {
-      height: 520px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      padding: 16px;
-      background: var(--code-bg);
-      font-family: 'Fira Code', monospace;
-      font-size: 0.85rem;
-    }
-
-    .event-card {
-      padding: 10px 14px;
-      background: rgba(255, 255, 255, 0.02);
-      border-left: 3px solid var(--text-dim);
-      border-radius: 4px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      animation: fadeIn 0.2s ease-out;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(-4px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    .event-card.event-run-start { border-left-color: var(--primary); }
-    .event-card.event-plan { border-left-color: var(--accent); }
-    .event-card.event-specialist { border-left-color: #f59e0b; }
-    .event-card.event-specialist-result-ok { border-left-color: var(--success); }
-    .event-card.event-specialist-result-fail { border-left-color: var(--error); }
-    .event-card.event-verification-pass { border-left-color: var(--success); }
-    .event-card.event-verification-fail { border-left-color: var(--error); }
-    .event-card.event-tokens { border-left-color: #64748b; }
-    .event-card.event-recovery { border-left-color: var(--warning); }
-    .event-card.event-run-end-ok { border-left-color: var(--success); }
-    .event-card.event-run-end-fail { border-left-color: var(--error); }
-
-    .event-meta {
-      display: flex;
-      justify-content: space-between;
-      color: var(--text-dim);
-      font-size: 0.75rem;
-    }
-
-    .event-title {
-      font-weight: 600;
-      color: var(--text);
-    }
-
-    .event-detail {
-      color: var(--text-muted);
-      font-size: 0.8rem;
-      word-break: break-word;
-    }
-
-    /* Verification Stages */
-    .stage-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 10px 14px;
-      background: var(--surface);
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--card-border);
-    }
-
-    .stage-title {
-      font-size: 0.85rem;
-      font-weight: 500;
-    }
-
-    /* Diff View */
-    .diff-box {
-      background: var(--code-bg);
-      border-radius: var(--radius-sm);
-      padding: 12px;
-      font-family: 'Fira Code', monospace;
-      font-size: 0.8rem;
-      max-height: 320px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      color: var(--text-muted);
-      border: 1px solid var(--card-border);
-    }
-
-    .diff-box div { display: block; }
-
-    .diff-add { color: #34d399; background: rgba(16, 185, 129, 0.08); }
-    .diff-del { color: #f87171; background: rgba(239, 68, 68, 0.08); }
-    .diff-hunk { color: #60a5fa; background: rgba(59, 130, 246, 0.08); }
-    .diff-file { color: #c084fc; font-weight: 600; }
-
-    /* Footer */
-    footer {
-      margin-top: auto;
-      padding: 16px 24px;
-      border-top: 1px solid var(--card-border);
-      display: flex;
-      justify-content: space-between;
-      color: var(--text-dim);
-      font-size: 0.8rem;
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Foreman Cockpit — Agent Hierarchy</title>
+<style>
+/* =====================================================================
+   Foreman Cockpit — agent-hierarchy UI for the ai-coding-harness.
+   Single self-contained file: inline CSS + JS, zero external deps.
+   Palette: #0f172a/#1e293b surfaces, #3b82f6 primary, #10b981 ok,
+   #ef4444 fail, #f59e0b warn, #64748b dim. Inter / system-ui stack.
+   ===================================================================== */
+:root {
+  --bg: #0f172a;
+  --bg-deep: #0b1120;
+  --surface: #1e293b;
+  --surface-2: #24334a;
+  --line: #2b3a54;
+  --line-soft: rgba(148, 163, 184, .14);
+  --conn: rgba(100, 116, 139, .45);
+  --text: #e6edf7;
+  --muted: #94a3b8;
+  --dim: #64748b;
+  --primary: #3b82f6;
+  --primary-hi: #60a5fa;
+  --primary-soft: rgba(59, 130, 246, .14);
+  --ok: #10b981;
+  --ok-hi: #34d399;
+  --ok-soft: rgba(16, 185, 129, .13);
+  --fail: #ef4444;
+  --fail-hi: #f87171;
+  --fail-soft: rgba(239, 68, 68, .12);
+  --warn: #f59e0b;
+  --warn-hi: #fbbf24;
+  --warn-soft: rgba(245, 158, 11, .13);
+  --cyan: #22d3ee;
+  --cyan-soft: rgba(34, 211, 238, .12);
+  --orange: #fb923c;
+  --radius: 10px;
+  --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --sans: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { color-scheme: dark; }
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  background-image:
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, .07) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(34, 211, 238, .05) 0px, transparent 50%);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.mono { font-family: var(--mono); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #2c3d58; border-radius: 6px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-track { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: #2c3d58 transparent; }
+button { font: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* ===================== top bar ===================== */
+#topbar {
+  height: 52px; flex: none;
+  display: flex; align-items: center; gap: 18px;
+  padding: 0 18px;
+  background: linear-gradient(180deg, #13203a 0%, #0f172a 100%);
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-size: 15px; letter-spacing: .02em; white-space: nowrap; }
+.brand b { font-weight: 700; }
+.brand span { color: var(--muted); }
+.ws-box { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.wsdot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex: none; }
+.wsdot.connecting { background: var(--warn); animation: pulseWarn 1.4s infinite; }
+.wsdot.connected { background: var(--ok); animation: pulseOk 2s infinite; }
+.wsdot.disconnected { background: var(--fail); }
+.wsdot.replay { background: var(--primary); animation: pulsePrimary 2s infinite; }
+@keyframes pulseOk { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,.5); } 75% { box-shadow: 0 0 0 8px rgba(16,185,129,0); } 100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); } }
+@keyframes pulseWarn { 0% { box-shadow: 0 0 0 0 rgba(245,158,11,.5); } 75% { box-shadow: 0 0 0 7px rgba(245,158,11,0); } 100% { box-shadow: 0 0 0 0 rgba(245,158,11,0); } }
+@keyframes pulsePrimary { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,.5); } 75% { box-shadow: 0 0 0 7px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }
+.ws-text { font-size: 11px; color: var(--muted); font-family: var(--mono); max-width: 230px; overflow: hidden; text-overflow: ellipsis; }
+.tstat { display: flex; flex-direction: column; gap: 0; white-space: nowrap; }
+.tstat label { font-size: 9px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); }
+.tstat span { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+.tstat span.tok { color: var(--primary-hi); font-weight: 600; }
+.chip {
+  font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: rgba(30, 41, 59, .7); color: var(--muted);
+  white-space: nowrap;
+}
+.chip.gov b { color: var(--warn-hi); font-weight: 600; }
+.chip.state { text-transform: uppercase; letter-spacing: .06em; }
+.chip.state.idle { color: var(--dim); }
+.chip.state.running { color: var(--primary-hi); background: var(--primary-soft); border-color: rgba(59,130,246,.45); animation: chipPulse 2s infinite; }
+.chip.state.verified { color: var(--ok-hi); background: var(--ok-soft); border-color: rgba(16,185,129,.45); }
+.chip.state.notverified, .chip.state.failed { color: var(--fail-hi); background: var(--fail-soft); border-color: rgba(239,68,68,.45); }
+@keyframes chipPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(59,130,246,.32); } 60% { box-shadow: 0 0 0 6px rgba(59,130,246,0); } }
+.spacer { flex: 1; }
+.replay-ctl { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.replay-ctl .rp-pos { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.mini-btn {
+  background: var(--surface); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 10px; font-size: 11.5px; font-weight: 600;
+  transition: background .15s, color .15s, border-color .15s;
+  white-space: nowrap;
+}
+.mini-btn:hover { background: var(--surface-2); color: var(--text); border-color: #3d4f6e; }
+.mini-btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.mini-btn.primary:hover { background: #4d8ef8; }
+
+/* ===================== layout ===================== */
+#layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 360px minmax(0, 1fr) 320px; }
+#left-pane { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+#center-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#right-rail { border-left: 1px solid var(--line); overflow-y: auto; min-height: 0; background: rgba(11, 17, 32, .35); }
+.pane-title {
+  flex: none; height: 40px; display: flex; align-items: center; gap: 10px;
+  padding: 0 16px; border-bottom: 1px solid var(--line-soft);
+  font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+}
+.pane-title .cnt { font-family: var(--mono); font-size: 10.5px; color: var(--dim); letter-spacing: 0; text-transform: none; }
+.pane-title .hint { margin-left: auto; font-size: 10px; font-weight: 500; color: var(--dim); letter-spacing: .02em; text-transform: none; }
+
+/* ===================== agent hierarchy tree ===================== */
+.tree { flex: 1; overflow-y: auto; padding: 16px 14px 40px 12px; }
+.tree-empty {
+  margin: 10px; padding: 18px 14px; border: 1px dashed var(--line);
+  border-radius: var(--radius); color: var(--dim); font-size: 12px; text-align: center;
+}
+.node { position: relative; margin-bottom: 12px; }
+.node-kids { position: relative; margin: 12px 0 0 28px; }
+.node-kids::before { content: ''; position: absolute; left: -14px; top: -12px; bottom: 0; border-left: 2px solid var(--conn); }
+.node.has-parent > .acard::before { content: ''; position: absolute; left: -14px; top: 22px; width: 15px; border-top: 2px solid var(--conn); }
+.node-kids > .node:last-child::after { content: ''; position: absolute; left: -16px; top: 24px; bottom: 0; width: 6px; background: var(--bg); }
+
+.acard {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--dim);
+  border-radius: var(--radius);
+  padding: 10px 12px 9px;
+  cursor: pointer;
+  transition: border-color .25s, box-shadow .25s, background .25s;
+}
+.acard:hover { background: var(--surface-2); border-color: rgba(148, 163, 184, .3); border-left-color: var(--dim); }
+.acard.selected { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary), 0 6px 18px rgba(59, 130, 246, .18); }
+.acard.st-idle { border-left-color: var(--dim); }
+.acard.st-thinking { border-left-color: var(--primary); animation: thinkPulse 1.8s ease-in-out infinite; }
+.acard.st-working { border-left-color: var(--cyan); box-shadow: 0 0 14px -4px rgba(34, 211, 238, .35); }
+.acard.st-retry { border-left-color: var(--warn); }
+.acard.st-blocked { border-left-color: var(--orange); }
+.acard.st-done { border-left-color: var(--ok); }
+.acard.st-failed { border-left-color: var(--fail); }
+@keyframes thinkPulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(59, 130, 246, .5), 0 0 10px rgba(59, 130, 246, .16); }
+  50% { box-shadow: 0 0 0 1px rgba(59, 130, 246, .22), 0 0 18px rgba(59, 130, 246, .38); }
+}
+.acard-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.adot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--dim); }
+.adot.d-idle { background: var(--dim); }
+.adot.d-thinking { background: var(--primary); box-shadow: 0 0 8px rgba(59, 130, 246, .7); animation: dotBlink 1.4s infinite; }
+.adot.d-working { background: var(--cyan); box-shadow: 0 0 8px rgba(34, 211, 238, .6); }
+.adot.d-retry { background: var(--warn); box-shadow: 0 0 8px rgba(245, 158, 11, .55); }
+.adot.d-blocked { background: var(--orange); }
+.adot.d-done { background: var(--ok); }
+.adot.d-failed { background: var(--fail); box-shadow: 0 0 8px rgba(239, 68, 68, .5); }
+@keyframes dotBlink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.aid { font-family: var(--mono); font-weight: 700; font-size: 12.5px; color: var(--text); }
+.lv, .tier, .inf {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .04em;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--primary-soft); color: var(--primary-hi); border: 1px solid rgba(59, 130, 246, .25);
+}
+.tier { background: rgba(148, 163, 184, .12); color: var(--muted); border-color: rgba(148, 163, 184, .2); }
+.inf { background: transparent; color: var(--dim); border-color: transparent; font-style: italic; font-weight: 500; }
+.astat { margin-left: auto; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+.astat.as-thinking { color: var(--primary-hi); }
+.astat.as-working { color: var(--cyan); }
+.astat.as-retry { color: var(--warn-hi); }
+.astat.as-blocked { color: var(--orange); }
+.astat.as-done { color: var(--ok-hi); }
+.astat.as-failed { color: var(--fail-hi); }
+.arole { margin-top: 3px; font-size: 11px; color: var(--muted); }
+.arole .retry-tag { color: var(--warn-hi); font-weight: 600; }
+.skills { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.sk {
+  font-size: 9.5px; padding: 1px 6px; border-radius: 4px;
+  background: rgba(148, 163, 184, .1); color: var(--muted); border: 1px solid rgba(148, 163, 184, .14);
+}
+.sk.more { background: transparent; border-color: transparent; color: var(--dim); }
+.atk-list { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.tk {
+  font-family: var(--mono); font-size: 9.5px; padding: 1px 6px; border-radius: 4px;
+  background: var(--primary-soft); color: var(--primary-hi); border: 1px solid rgba(59, 130, 246, .25);
+}
+.tk.tk-done { background: var(--ok-soft); color: var(--ok-hi); border-color: rgba(16, 185, 129, .3); }
+.tk.tk-failed { background: var(--fail-soft); color: var(--fail-hi); border-color: rgba(239, 68, 68, .3); }
+.activity {
+  margin-top: 7px; font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.activity .glyph { margin-right: 5px; font-weight: 700; }
+.activity .glyph.g-thinking { color: var(--primary-hi); }
+.activity .glyph.g-working { color: var(--cyan); }
+.activity .glyph.g-retry { color: var(--warn-hi); }
+.activity .glyph.g-done { color: var(--ok-hi); }
+.activity .glyph.g-failed { color: var(--fail-hi); }
+.activity .glyph.g-idle, .activity .glyph.g-blocked { color: var(--dim); }
+.ameter { margin-top: 7px; display: flex; align-items: center; gap: 8px; }
+.abar { flex: 1; height: 4px; border-radius: 3px; background: rgba(148, 163, 184, .12); overflow: hidden; }
+.abar i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--primary), var(--cyan)); transition: width .4s ease; }
+.atok { font-family: var(--mono); font-size: 9.5px; color: var(--dim); white-space: nowrap; }
+
+/* ===================== center tabs ===================== */
+.tabs { flex: none; display: flex; gap: 2px; align-items: stretch; padding: 0 10px; height: 42px; border-bottom: 1px solid var(--line); background: rgba(15, 23, 42, .6); }
+.tab-btn {
+  border: 0; background: transparent; color: var(--dim); font-weight: 600; font-size: 12.5px;
+  padding: 0 16px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  display: flex; align-items: center; gap: 8px; transition: color .15s, border-color .15s;
+}
+.tab-btn .sub { font-family: var(--mono); font-size: 10px; color: var(--primary-hi); font-weight: 500; }
+.tab-btn:hover { color: var(--muted); }
+.tab-btn.active { color: var(--text); border-bottom-color: var(--primary); }
+.tab-body { display: none; flex: 1; min-height: 0; overflow: hidden; }
+.tab-body.active { display: flex; flex-direction: column; }
+.tab-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: 16px 18px 30px; }
+.dim-note { color: var(--dim); font-size: 12px; padding: 14px; text-align: center; }
+.dim-note.pad { padding: 40px 20px; }
+
+/* ---- plan tab ---- */
+.plan-head { margin-bottom: 14px; }
+.ph-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ph-chip { font-size: 11px; padding: 3px 9px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line-soft); color: var(--muted); }
+.ph-chip b { color: var(--text); font-weight: 600; }
+.ph-chip.repro { border-color: rgba(16, 185, 129, .35); color: var(--ok-hi); font-family: var(--mono); font-size: 10.5px; }
+.ph-issue {
+  margin-top: 8px; font-size: 11.5px; color: var(--muted); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.kanban { display: grid; grid-template-columns: repeat(4, minmax(200px, 1fr)); gap: 12px; align-items: start; }
+.kcol { background: rgba(11, 17, 32, .55); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 8px; min-height: 140px; }
+.kcol-h { display: flex; align-items: center; gap: 8px; padding: 2px 6px 8px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.kcol-h .kc { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
+.kcol-h .kdot { width: 7px; height: 7px; border-radius: 50%; }
+.kcol[data-status="pending"] .kdot { background: var(--dim); }
+.kcol[data-status="running"] .kdot { background: var(--primary); animation: dotBlink 1.4s infinite; }
+.kcol[data-status="done"] .kdot { background: var(--ok); }
+.kcol[data-status="failed"] .kdot { background: var(--fail); }
+.stcard {
+  background: var(--surface); border: 1px solid var(--line-soft); border-left: 3px solid var(--dim);
+  border-radius: 8px; padding: 9px 10px; margin-bottom: 8px; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.stcard:hover { background: var(--surface-2); }
+.stcard.stc-pending { border-left-color: var(--dim); }
+.stcard.stc-running { border-left-color: var(--primary); box-shadow: 0 0 10px -5px rgba(59, 130, 246, .5); }
+.stcard.stc-done { border-left-color: var(--ok); }
+.stcard.stc-failed { border-left-color: var(--fail); }
+.st-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.st-id { font-family: var(--mono); font-weight: 700; font-size: 11px; color: var(--primary-hi); }
+.st-sp { font-size: 9.5px; padding: 1px 6px; border-radius: 4px; background: rgba(139, 92, 246, .14); color: #c4b5fd; border: 1px solid rgba(139, 92, 246, .25); }
+.dots { margin-left: auto; display: flex; gap: 2px; }
+.dots i { width: 4px; height: 7px; border-radius: 1.5px; background: rgba(148, 163, 184, .18); }
+.dots i.on { background: var(--warn); }
+.st-title { margin-top: 5px; font-size: 12px; font-weight: 600; color: var(--text); line-height: 1.4; }
+.st-files { margin-top: 5px; display: flex; flex-direction: column; gap: 2px; }
+.st-files span { font-family: var(--mono); font-size: 10px; color: var(--cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-meta { margin-top: 6px; font-size: 10px; color: var(--dim); font-family: var(--mono); }
+.st-foot { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.st-agent { font-family: var(--mono); font-size: 10px; color: var(--primary-hi); background: var(--primary-soft); padding: 1px 6px; border-radius: 4px; }
+.st-score { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.st-retry { font-size: 10px; font-weight: 700; color: var(--warn-hi); background: var(--warn-soft); padding: 1px 6px; border-radius: 4px; }
+.st-note { font-size: 10px; color: var(--warn-hi); }
+.st-acc { margin-top: 7px; border-top: 1px dashed var(--line-soft); }
+.st-acc summary { cursor: pointer; font-size: 10.5px; color: var(--muted); padding: 5px 0 2px; list-style: none; }
+.st-acc summary::before { content: '▸ '; color: var(--dim); }
+.st-acc[open] summary::before { content: '▾ '; }
+.st-acc div { font-size: 11px; color: var(--muted); padding: 2px 0 4px; line-height: 1.5; }
+
+/* ---- agent tab ---- */
+.aw-head { padding: 14px 18px 12px; border-bottom: 1px solid var(--line-soft); }
+.aw-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.aw-id { font-family: var(--mono); font-size: 17px; font-weight: 700; color: var(--text); }
+.aw-status { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--dim); }
+.aw-status.as-thinking { color: var(--primary-hi); }
+.aw-status.as-working { color: var(--cyan); }
+.aw-status.as-retry { color: var(--warn-hi); }
+.aw-status.as-blocked { color: var(--orange); }
+.aw-status.as-done { color: var(--ok-hi); }
+.aw-status.as-failed { color: var(--fail-hi); }
+.aw-sub { margin-top: 5px; color: var(--muted); font-size: 12px; }
+.aw-sub .sk { margin-right: 4px; }
+.aw-stats { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 14px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.aw-stats .warn { color: var(--warn-hi); }
+.aw-stats .chip-inf { color: var(--cyan); }
+.aw-prog { margin-top: 10px; }
+.aw-prog-label { display: flex; justify-content: space-between; font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
+.aw-prog-label span:last-child { font-family: var(--mono); text-transform: none; letter-spacing: 0; color: var(--muted); }
+.pbar { height: 6px; border-radius: 4px; background: rgba(148, 163, 184, .12); overflow: hidden; }
+.pbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--primary), var(--cyan)); border-radius: 4px; transition: width .4s ease; }
+.del-banner {
+  margin: 12px 18px 0; padding: 12px 14px; border-radius: var(--radius);
+  background: linear-gradient(90deg, rgba(59, 130, 246, .12), rgba(59, 130, 246, .03));
+  border: 1px solid rgba(59, 130, 246, .35);
+}
+.del-title { font-size: 12px; color: var(--text); }
+.del-title b { font-family: var(--mono); color: var(--primary-hi); }
+.del-factors { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; }
+.df { display: grid; grid-template-columns: 108px 1fr 40px; align-items: center; gap: 8px; }
+.df-l { font-size: 10.5px; color: var(--muted); }
+.df-l i { font-style: normal; color: var(--dim); font-size: 9px; }
+.df-bar { height: 5px; border-radius: 3px; background: rgba(148, 163, 184, .12); overflow: hidden; }
+.df-bar i { display: block; height: 100%; border-radius: 3px; background: var(--primary); transition: width .4s; }
+.df-v { font-family: var(--mono); font-size: 10px; color: var(--muted); text-align: right; }
+.del-total { margin-top: 9px; display: flex; align-items: center; gap: 10px; }
+.del-total .df-l { white-space: nowrap; }
+.del-total .df-bar { flex: 1; }
+.del-total .df-bar i { background: linear-gradient(90deg, var(--primary), var(--cyan)); }
+.del-hist { margin: 10px 18px 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.del-hist .dh { font-family: var(--mono); font-size: 10px; color: var(--dim); background: var(--surface); border: 1px solid var(--line-soft); border-radius: 4px; padding: 1px 6px; }
+.aw-log-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 10px 18px 14px; }
+.aw-log-head { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); padding: 2px 0 8px; }
+.aw-log { flex: 1; min-height: 0; overflow-y: auto; background: var(--bg-deep); border: 1px solid var(--line-soft); border-radius: 8px; padding: 6px 0; font-family: var(--mono); }
+.trow {
+  display: grid; grid-template-columns: 96px 118px minmax(120px, 1fr) 22px 62px minmax(120px, 1.1fr);
+  gap: 10px; padding: 2.5px 12px; font-size: 11px; border-bottom: 1px solid rgba(148, 163, 184, .05);
+}
+.trow:last-child { border-bottom: 0; }
+.t-time { color: var(--dim); white-space: nowrap; }
+.t-tool { color: var(--cyan); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t-args { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t-ok { color: var(--ok-hi); font-weight: 700; }
+.trow.fail .t-ok { color: var(--fail-hi); }
+.t-ms { color: var(--dim); text-align: right; white-space: nowrap; }
+.t-res { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trow.fail .t-args, .trow.fail .t-res { color: var(--fail-hi); }
+
+/* ---- diff tab ---- */
+.diff-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line-soft); }
+.diff-head .pane-sub { font-size: 13px; font-weight: 700; }
+.diff-status { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.diff-body { flex: 1; min-height: 0; overflow: auto; background: var(--bg-deep); font-family: var(--mono); font-size: 11.5px; padding: 8px 0 30px; }
+.diff-file {
+  padding: 5px 14px; margin-top: 10px; background: var(--surface-2); color: var(--primary-hi);
+  font-weight: 700; border-left: 3px solid var(--primary); position: sticky; top: 0;
+}
+.diff-file:first-child { margin-top: 0; }
+.diff-hunk { padding: 2px 14px; color: var(--cyan); background: rgba(34, 211, 238, .06); }
+.dl { padding: 0 14px; white-space: pre-wrap; word-break: break-all; }
+.dl-add { background: rgba(16, 185, 129, .1); color: #86efac; }
+.dl-del { background: rgba(239, 68, 68, .09); color: #fca5a5; }
+.dl-ctx { color: var(--muted); }
+.diff-trunc { padding: 8px 14px; color: var(--dim); font-style: italic; }
+
+/* ---- verify tab ---- */
+.pane-sub { flex: none; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.vfy-verdict {
+  margin: 14px 0 6px; padding: 12px 16px; border-radius: var(--radius); font-size: 13px; font-weight: 600;
+}
+.vfy-verdict.ok { background: linear-gradient(90deg, rgba(16, 185, 129, .16), transparent); border: 1px solid rgba(16, 185, 129, .4); color: var(--ok-hi); }
+.vfy-verdict.fail { background: linear-gradient(90deg, rgba(239, 68, 68, .14), transparent); border: 1px solid rgba(239, 68, 68, .4); color: var(--fail-hi); }
+.vfy-verdict .vsub { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 400; color: var(--muted); font-family: var(--mono); }
+.vsteps { list-style: none; margin: 12px 0 4px; padding: 0; }
+.vstep { position: relative; display: grid; grid-template-columns: 32px 1fr; column-gap: 12px; padding-bottom: 16px; }
+.vstep::before { content: ''; position: absolute; left: 15px; top: 30px; bottom: 0; border-left: 2px solid var(--line-soft); }
+.vstep:last-child { padding-bottom: 4px; }
+.vstep:last-child::before { display: none; }
+.vicon {
+  grid-row: 1 / span 2; width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 800; font-family: var(--mono);
+  border: 1px solid var(--line); background: var(--surface); color: var(--dim);
+}
+.vstep.pending .vicon { border-style: dashed; animation: pendPulse 2s infinite; }
+.vstep.pass .vicon { color: var(--ok-hi); border-color: rgba(16, 185, 129, .55); background: var(--ok-soft); }
+.vstep.fail .vicon { color: var(--fail-hi); border-color: rgba(239, 68, 68, .55); background: var(--fail-soft); }
+.vstep.skipped .vicon { color: var(--dim); border-style: dotted; }
+@keyframes pendPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(148, 163, 184, .28); } 70% { box-shadow: 0 0 0 6px rgba(148, 163, 184, 0); } }
+.vtitle { font-size: 12.5px; font-weight: 700; font-family: var(--mono); color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 4px; }
+.vstep.fail .vtitle { color: var(--fail-hi); }
+.vdur { font-size: 10.5px; color: var(--dim); font-weight: 500; }
+.vblock { font-size: 9px; padding: 1px 6px; border-radius: 4px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.vblock.blk { color: var(--warn-hi); background: var(--warn-soft); }
+.vblock.adv { color: var(--dim); background: rgba(148, 163, 184, .1); }
+.vdetail { grid-column: 2; font-size: 11.5px; color: var(--muted); line-height: 1.45; margin-top: 2px; }
+.baseline { margin: 16px 0 30px; padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--surface); }
+.bl-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin-bottom: 9px; }
+.bl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.bl-grid label { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin-bottom: 2px; }
+.bl-grid span { font-family: var(--mono); font-size: 12px; color: var(--text); }
+.ok-t { color: var(--ok-hi) !important; }
+.fail-t { color: var(--fail-hi) !important; }
+
+/* ---- timeline tab ---- */
+.tl-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 10px 18px; border-bottom: 1px solid var(--line-soft); }
+#tlCount { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.tl-hint { font-size: 10.5px; color: var(--dim); }
+#tlFollow { margin-left: auto; visibility: hidden; }
+#tlFollow.show { visibility: visible; }
+.tl-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0 20px; background: var(--bg-deep); font-family: var(--mono); }
+.ev { display: grid; grid-template-columns: 80px 18px 168px 1fr; gap: 10px; padding: 2.5px 14px; font-size: 11px; border-bottom: 1px solid rgba(148, 163, 184, .045); }
+.ev:hover { background: rgba(148, 163, 184, .06); }
+.ev-t { color: var(--dim); white-space: nowrap; }
+.ev-i { text-align: center; color: var(--dim); }
+.ev-k { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-d { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev.c-ok .ev-i, .ev.c-ok .ev-k { color: var(--ok-hi); }
+.ev.c-fail .ev-i, .ev.c-fail .ev-k { color: var(--fail-hi); }
+.ev.c-fail .ev-d { color: var(--fail-hi); opacity: .85; }
+.ev.c-warn .ev-i, .ev.c-warn .ev-k { color: var(--warn-hi); }
+.ev.c-run .ev-i, .ev.c-run .ev-k { color: var(--primary-hi); }
+.ev.c-arch .ev-i, .ev.c-arch .ev-k { color: var(--primary-hi); opacity: .8; }
+.ev.c-tool .ev-i, .ev.c-tool .ev-k { color: var(--cyan); }
+.ev.c-tok .ev-i, .ev.c-tok .ev-k { color: var(--warn-hi); opacity: .8; }
+.ev.c-dim .ev-i, .ev.c-dim .ev-k { color: var(--dim); }
+
+/* ===================== right rail ===================== */
+.rail-sec { margin: 12px; padding: 13px 14px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--radius); }
+.rail-sec h3 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin-bottom: 10px; }
+.rail-sec label.fld { display: block; font-size: 10.5px; color: var(--dim); margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .07em; }
+textarea, input[type="text"] {
+  width: 100%; background: var(--bg-deep); border: 1px solid var(--line); border-radius: 7px;
+  color: var(--text); font-family: var(--sans); font-size: 12.5px; line-height: 1.5;
+  padding: 8px 10px; resize: none; transition: border-color .15s;
+}
+textarea { min-height: 74px; overflow: hidden; }
+textarea:focus, input[type="text"]:focus { border-color: var(--primary); outline: none; }
+input[type="text"] { font-family: var(--mono); font-size: 11.5px; }
+.chk { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.chk input { accent-color: var(--primary); width: 14px; height: 14px; }
+.chk .why { display: block; font-size: 10px; color: var(--dim); }
+.run-btn {
+  margin-top: 14px; width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--primary);
+  background: linear-gradient(180deg, #3b82f6, #2563eb); color: #fff; font-weight: 700; font-size: 13px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  transition: filter .15s, opacity .15s;
+}
+.run-btn:hover { filter: brightness(1.1); }
+.run-btn:disabled { opacity: .65; cursor: wait; }
+.run-btn .spin { width: 13px; height: 13px; border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; display: none; }
+.run-btn.loading .spin { display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.launch-result { margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 12px; }
+.launch-result.ok { background: var(--ok-soft); border: 1px solid rgba(16, 185, 129, .4); color: var(--ok-hi); }
+.launch-result.fail { background: var(--fail-soft); border: 1px solid rgba(239, 68, 68, .4); color: var(--fail-hi); }
+.launch-result .lr-detail { margin-top: 4px; color: var(--muted); font-size: 11px; word-break: break-word; }
+.flags { display: flex; flex-direction: column; gap: 6px; }
+.flag {
+  font-size: 11px; padding: 5px 9px; border-radius: 6px; line-height: 1.4;
+  background: var(--warn-soft); border: 1px solid rgba(245, 158, 11, .35); color: var(--warn-hi);
+  word-break: break-word;
+}
+.flag::before { content: '⚠ '; }
+.no-flags { font-size: 11.5px; color: var(--dim); }
+.meta-row { display: flex; gap: 8px; font-size: 11px; margin-bottom: 6px; align-items: baseline; }
+.meta-row label { flex: none; color: var(--dim); text-transform: uppercase; font-size: 9.5px; letter-spacing: .07em; width: 52px; }
+.meta-row span { font-family: var(--mono); color: var(--muted); word-break: break-all; }
+.evidence-links { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.evidence-links a {
+  font-family: var(--mono); font-size: 10.5px; color: var(--primary-hi);
+  background: var(--primary-soft); border: 1px solid rgba(59, 130, 246, .3); border-radius: 5px;
+  padding: 2px 8px; text-decoration: none;
+}
+.evidence-links a:hover { background: rgba(59, 130, 246, .25); }
+
+/* ===================== responsive ===================== */
+@media (max-width: 1360px) {
+  #layout { grid-template-columns: 318px minmax(0, 1fr) 282px; }
+  .ws-text { max-width: 150px; }
+}
+@media (max-width: 1100px) {
+  #layout { grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  #left-pane { grid-column: 1; grid-row: 1; }
+  #center-pane { grid-column: 2; grid-row: 1; }
+  #right-rail { grid-column: 1 / span 2; grid-row: 2; border-left: none; border-top: 1px solid var(--line); max-height: 42vh; display: flex; gap: 0; overflow-x: auto; overflow-y: hidden; }
+  #right-rail .rail-sec { flex: 1; min-width: 260px; margin: 10px; align-self: stretch; overflow-y: auto; max-height: none; }
+  .kanban { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+  .del-factors { grid-template-columns: 1fr; }
+}
+</style>
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <div class="brand-icon">⚡</div>
-      <span>Foreman Cockpit</span>
-      <span style="font-size: 0.75rem; color: var(--text-dim); font-weight: normal;">v0.1.0 (Platform Gateway)</span>
+
+<header id="topbar">
+  <div class="brand">
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+      <g stroke="#64748b" stroke-width="1.2" fill="none">
+        <path d="M10 5 V8 M4 8 H16 M4 8 V12 M10 8 V12 M16 8 V12"/>
+      </g>
+      <rect x="6.5" y="1" width="7" height="4" rx="1" fill="#3b82f6"/>
+      <rect x="0.5" y="12" width="7" height="4" rx="1" fill="#10b981"/>
+      <rect x="6.5" y="12" width="7" height="4" rx="1" fill="#22d3ee"/>
+      <rect x="12.5" y="12" width="7" height="4" rx="1" fill="#64748b"/>
+    </svg>
+    <span>Foreman <b>Cockpit</b></span>
+  </div>
+  <div class="ws-box" title="gateway WebSocket status">
+    <span class="wsdot connecting" id="wsDot" role="status" aria-label="websocket status"></span>
+    <span class="ws-text" id="wsText">connecting…</span>
+  </div>
+  <div class="tstat"><label>run</label><span id="runIdTop">—</span></div>
+  <div class="tstat"><label>tokens</label><span class="tok" id="tokenTop">0</span></div>
+  <div class="chip gov" id="govChip">governor <b>—</b></div>
+  <div class="chip state idle" id="stateChip" role="status">IDLE</div>
+  <div class="tstat"><label>elapsed</label><span id="runTimer">—</span></div>
+  <div class="spacer"></div>
+  <div class="replay-ctl" id="replayControls" hidden>
+    <button class="mini-btn" id="btnReplayPlay" aria-label="play or pause replay">⏸ pause</button>
+    <button class="mini-btn" id="btnReplayStep" aria-label="step one event">⏭ step</button>
+    <span class="rp-pos" id="replayPos">0 / 0</span>
+  </div>
+</header>
+
+<main id="layout">
+
+  <!-- ============ left: agent hierarchy ============ -->
+  <aside id="left-pane" aria-label="agent hierarchy">
+    <div class="pane-title">
+      Agent Hierarchy <span class="cnt" id="agentCount">0 agents</span>
+      <span class="hint">click a card → workspace</span>
     </div>
-
-    <div class="nav-actions">
-      <div class="status-badge" id="wsStatus">
-        <div class="pulse" id="pulseIndicator"></div>
-        <span id="wsStatusText">Connecting...</span>
-      </div>
-      <button class="btn btn-secondary" onclick="reconnectWS()">Reconnect WS</button>
+    <div class="tree" id="agentTree" role="tree" aria-label="agent org tree">
+      <div class="tree-empty">awaiting roster / events…</div>
     </div>
-  </header>
+  </aside>
 
-  <main>
-    <!-- Top Metrics -->
-    <div class="metrics-ribbon">
-      <div class="metric-card">
-        <div class="metric-title">Active Run ID</div>
-        <div class="metric-value" id="metricRunId">—</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-title">Total Events</div>
-        <div class="metric-value" id="metricEvents">0</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-title">Tokens Meter</div>
-        <div class="metric-value" id="metricTokens">0</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-title">Pipeline State</div>
-        <div class="metric-value" id="metricStatus" style="font-size: 1.15rem; color: #60a5fa;">IDLE</div>
-      </div>
-    </div>
+  <!-- ============ center: tabbed workspace ============ -->
+  <section id="center-pane" aria-label="workspace">
+    <nav class="tabs" role="tablist" aria-label="workspace tabs">
+      <button class="tab-btn active" data-tab="plan" role="tab" aria-selected="true">Plan</button>
+      <button class="tab-btn" data-tab="agent" role="tab" aria-selected="false" id="tabBtnAgent">Agent</button>
+      <button class="tab-btn" data-tab="diff" role="tab" aria-selected="false">Diff</button>
+      <button class="tab-btn" data-tab="verify" role="tab" aria-selected="false">Verify</button>
+      <button class="tab-btn" data-tab="timeline" role="tab" aria-selected="false">Timeline</button>
+    </nav>
 
-    <div class="dashboard-grid">
-      <!-- Left Column: Task Launcher & Roster -->
-      <div style="display: flex; flex-direction: column; gap: 24px;">
-        <div class="panel">
-          <div class="panel-header">
-            <span>🚀 Run Task</span>
-            <span style="font-size: 0.75rem; color: var(--text-dim);">POST /api/tasks</span>
-          </div>
-          <div class="panel-body">
-            <div class="form-group">
-              <label for="issueInput">Issue Description</label>
-              <textarea id="issueInput" placeholder="Describe the issue or bug to solve (e.g., Fix negative addition in calculator)"></textarea>
-            </div>
-
-            <div class="presets">
-              <span class="preset-chip" onclick="setPreset('test_calculator.py::test_add_negative fails: add(-2, -3) returns 5 instead of -5. Fix add() in calculator.py so negative addition works and all tests pass.')">Calculator Negatives</span>
-              <span class="preset-chip" onclick="setPreset('test_calculator.py::test_div_zero fails: dividing by zero raises an unclear error. Handle division by zero gracefully and make the tests pass.')">Division by Zero</span>
-              <span class="preset-chip" onclick="setPreset('test_history.py::test_history_trap fails: the history log records the wrong operand order. Fix the history() function so the tests pass.')">History Trap</span>
-            </div>
-
-            <div class="form-group">
-              <label for="repoInput">Target Repository Path</label>
-              <input type="text" id="repoInput" value="fixtures/mini-repo">
-            </div>
-
-            <button class="btn btn-primary" id="launchBtn" onclick="launchTask()">
-              <span id="launchBtnContent">Run Autonomous Pipeline</span>
-            </button>
-
-            <div class="run-result" id="runResult"></div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-header">
-            <span>🤖 Agent Roster</span>
-            <span class="badge badge-active" id="agentCount">…</span>
-          </div>
-          <div class="panel-body" style="padding: 12px; gap: 8px;" id="agentRoster"></div>
-        </div>
-      </div>
-
-      <!-- Center Column: Live Activity Feed -->
-      <div class="panel">
-        <div class="panel-header">
-          <span>⚡ Live Event Activity Stream</span>
-          <span style="font-size: 0.75rem; color: var(--text-dim);" id="feedCount">0 events</span>
-        </div>
-        <div class="activity-feed" id="activityFeed">
-          <div style="color: var(--text-dim); text-align: center; margin-top: 40px;">
-            Waiting for engine events over WebSocket...<br>
-            <small style="opacity: 0.6;">Launch a task or connect via terminal to see live streaming.</small>
-          </div>
-        </div>
-      </div>
-
-      <!-- Right Column: Verification & Evidence -->
-      <div style="display: flex; flex-direction: column; gap: 24px;">
-        <div class="panel">
-          <div class="panel-header">
-            <span>🧪 Verification Pipeline</span>
-            <span style="font-size: 0.75rem; color: var(--text-dim);">Stages 1–6</span>
-          </div>
-          <div class="panel-body" style="padding: 12px; gap: 8px;">
-            <div class="stage-item">
-              <span class="stage-title">1. Diff Integrity</span>
-              <span class="badge badge-idle" id="stage-integrity">Pending</span>
-            </div>
-            <div class="stage-item">
-              <span class="stage-title">2. Syntax Gate</span>
-              <span class="badge badge-idle" id="stage-syntax">Pending</span>
-            </div>
-            <div class="stage-item">
-              <span class="stage-title">3. Test Execution</span>
-              <span class="badge badge-idle" id="stage-tests">Pending</span>
-            </div>
-            <div class="stage-item">
-              <span class="stage-title">4. Code Review</span>
-              <span class="badge badge-idle" id="stage-review">Pending</span>
-            </div>
-            <div class="stage-item">
-              <span class="stage-title">5. Security Scan</span>
-              <span class="badge badge-idle" id="stage-security">Pending</span>
-            </div>
-            <div class="stage-item">
-              <span class="stage-title">6. Final Review</span>
-              <span class="badge badge-idle" id="stage-final">Pending</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-header">
-            <span>📝 Patch Diff</span>
-            <span style="font-size: 0.75rem; color: var(--text-dim);" id="diffStatus">No patch</span>
-          </div>
-          <div class="panel-body" style="padding: 12px;">
-            <div class="diff-box" id="diffBox">No diff generated yet for current run.</div>
-          </div>
+    <div class="tab-body active" id="tab-plan" role="tabpanel" aria-label="plan">
+      <div class="tab-scroll">
+        <div class="plan-head" id="planHead"></div>
+        <div class="kanban" id="kanban">
+          <div class="kcol" data-status="pending"><div class="kcol-h"><span class="kdot"></span>Pending<span class="kc" id="kc-pending">0</span></div><div id="kcb-pending"></div></div>
+          <div class="kcol" data-status="running"><div class="kcol-h"><span class="kdot"></span>Running<span class="kc" id="kc-running">0</span></div><div id="kcb-running"></div></div>
+          <div class="kcol" data-status="done"><div class="kcol-h"><span class="kdot"></span>Done<span class="kc" id="kc-done">0</span></div><div id="kcb-done"></div></div>
+          <div class="kcol" data-status="failed"><div class="kcol-h"><span class="kdot"></span>Failed<span class="kc" id="kc-failed">0</span></div><div id="kcb-failed"></div></div>
         </div>
       </div>
     </div>
-  </main>
 
-  <footer>
-    <div>Foreman Autonomous Coding Harness &bull; Evaluator &amp; Platform Architecture</div>
-    <div>API Gateway: <code style="color: #60a5fa;">localhost:8080</code> &bull; Python Orchestrator: <code style="color: #60a5fa;">localhost:8000</code></div>
-  </footer>
+    <div class="tab-body" id="tab-agent" role="tabpanel" aria-label="agent workspace">
+      <div id="agentWorkspace" style="display:flex;flex-direction:column;flex:1;min-height:0;">
+        <div class="dim-note pad">Select an agent card in the hierarchy to open its workspace.</div>
+      </div>
+    </div>
 
-  <script>
-    // Foreman Cockpit — fixed wiring:
-    // - agent roster rendered from GET /api/agents (fallback to eval defaults)
-    // - verification stages driven by `verification.stage` events (6 real stages)
-    // - token meter driven by `tokens.usage` events (cumulative, set not add)
-    // - one run id everywhere (gateway threads it through the pipeline)
-    // - launch results + evidence links + patch diff surfaced in the UI
-    let socket = null;
-    let eventCount = 0;
-    let activeRunId = null;
+    <div class="tab-body" id="tab-diff" role="tabpanel" aria-label="patch diff">
+      <div class="diff-head">
+        <span class="pane-sub">Patch</span>
+        <span class="diff-status" id="diffStatus">awaiting run end…</span>
+        <button class="mini-btn" id="btnDiffRefresh" style="margin-left:auto">⟳ refresh</button>
+      </div>
+      <div class="diff-body" id="diffBody"><div class="dim-note">awaiting patch…</div></div>
+    </div>
 
-    // ---- agent roster -------------------------------------------------------
-    const ROLE_META = {
-      architect:   { icon: '👑', name: 'Architect',   sub: 'Decomposition & Strategy' },
-      manager:     { icon: '🧭', name: 'Manager',     sub: 'Task Routing & Budget Governor' },
-      locator:     { icon: '🔍', name: 'Locator',     sub: 'File & Symbol Localization' },
-      implementer: { icon: '💻', name: 'Implementer', sub: 'Code Changes & Patches' },
-      verifier:    { icon: '🧪', name: 'Verifier',    sub: '6-Stage Verification Gate' },
+    <div class="tab-body" id="tab-verify" role="tabpanel" aria-label="verification">
+      <div class="tab-scroll">
+        <div class="vfy-verdict" id="vfyVerdict" style="display:none"></div>
+        <div class="pane-sub">Gates</div>
+        <ol class="vsteps" id="vfySteps"></ol>
+        <div class="baseline" id="baselineBlock"></div>
+      </div>
+    </div>
+
+    <div class="tab-body" id="tab-timeline" role="tabpanel" aria-label="event timeline">
+      <div class="tl-head">
+        <span id="tlCount">0 events</span>
+        <span class="tl-hint">newest at bottom · scroll up to pause follow</span>
+        <button class="mini-btn" id="tlFollow" aria-label="resume auto-scroll">⤓ follow</button>
+      </div>
+      <div class="tl-feed" id="timelineFeed" aria-label="event feed"></div>
+    </div>
+  </section>
+
+  <!-- ============ right rail: launcher + security ============ -->
+  <aside id="right-rail" aria-label="run launcher and security">
+    <section class="rail-sec">
+      <h3>Run Launcher</h3>
+      <label class="fld" for="issueInput">Issue</label>
+      <textarea id="issueInput" rows="4" placeholder="Describe the issue for the harness to fix…"></textarea>
+      <label class="fld" for="repoInput">repo_root</label>
+      <input type="text" id="repoInput" value="fixtures/mini-repo" spellcheck="false">
+      <label class="chk" for="demoChk">
+        <input type="checkbox" id="demoChk">
+        <span>demo mode<span class="why">scripted run — no LLM calls, no repo edits</span></span>
+      </label>
+      <button class="run-btn" id="launchBtn"><span class="spin" aria-hidden="true"></span><span class="btn-label">▶ run pipeline</span></button>
+      <div class="launch-result" id="launchResult" hidden></div>
+    </section>
+
+    <section class="rail-sec">
+      <h3>Security Flags</h3>
+      <div class="flags" id="secFlags"><div class="no-flags">none</div></div>
+    </section>
+
+    <section class="rail-sec">
+      <h3>Run</h3>
+      <div id="runMeta">
+        <div class="meta-row"><label>run id</label><span id="metaRunId">—</span></div>
+        <div class="meta-row"><label>state</label><span id="metaState">IDLE</span></div>
+        <div class="meta-row"><label>events</label><span id="metaEvents">0</span></div>
+      </div>
+      <div class="evidence-links" id="evidenceLinks" hidden></div>
+    </section>
+  </aside>
+</main>
+
+<script>
+'use strict';
+/* =====================================================================
+   Foreman Cockpit — vanilla JS, one state object S, one onEvent(ev)
+   pipeline shared by the live WebSocket and the offline replay mode.
+   ===================================================================== */
+
+var STAGES_CANON = ['1-integrity', '2-self-check', '3-local-tests', '4-code-review', '5-security', '6-final-review'];
+var LEVEL_LABEL = { 1: 'L1', 2: 'L2', 3: 'L3', 4: 'L4' };
+var TOOL_RENDER_CAP = 400;   // rows rendered in an agent workspace
+var TIMELINE_CAP = 500;      // rows rendered in the feed (full log kept in S.log)
+var LOG_CAP = 5000;          // in-memory event log cap
+
+var S = {
+  mode: 'live',              // 'live' | 'replay'
+  ws: null,
+  runId: null,
+  runState: 'IDLE',          // IDLE | RUNNING | VERIFIED | NOT VERIFIED | FAILED
+  runStartTs: null,
+  runEndTs: null,
+  tokens: 0,                 // cumulative run tokens — SET from tokens.usage, never summed
+  governor: null,
+  issue: '',
+  flags: [],
+  profile: null,
+  reproductionTest: null,
+  agents: {},                // id -> agent record (roster + live state merged)
+  subtasks: {},              // id -> subtask record
+  subtaskOrder: [],
+  openAcc: {},               // task id -> acceptance <details> open state
+  stages: {},                // stage name -> record
+  baseline: null,
+  verdict: null,
+  runError: null,
+  log: [],                   // all events kept in memory (capped)
+  eventCount: 0,
+  tab: 'plan',
+  selected: null,            // selected agent id
+  timelineFollow: true,
+  replay: { data: [], idx: 0, playing: false, timer: null }
+};
+
+/* ======================= tiny helpers ======================= */
+function $(id) { return document.getElementById(id); }
+function esc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function trunc(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) + '…' : s; }
+function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+function timeStr(ts) { return new Date(ts || Date.now()).toLocaleTimeString('en-GB', { hour12: false }); }
+function fmtTokens(n) {
+  n = num(n);
+  if (n < 1000) return String(n);
+  if (n < 1000000) return (n / 1000).toFixed(1) + 'k';
+  return (n / 1000000).toFixed(2) + 'M';
+}
+function fmtDur(sec) {
+  sec = num(sec);
+  if (sec < 60) return sec.toFixed(1) + 's';
+  var m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return m + 'm ' + String(s).padStart(2, '0') + 's';
+}
+function fmtClock(sec) {
+  sec = Math.max(0, num(sec));
+  if (sec < 60) return sec.toFixed(1) + 's';
+  var m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return m + 'm ' + String(s).padStart(2, '0') + 's';
+}
+function fmtMs(ms) {
+  if (ms == null) return '';
+  ms = num(ms);
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  return fmtDur(ms / 1000);
+}
+
+/* ======================= agent records ======================= */
+function deriveLevel(role, level) {
+  if (level != null) return level;
+  var r = String(role || '').toLowerCase();
+  if (r === 'architect') return 1;
+  if (r === 'manager') return 2;
+  return 3;
+}
+function ensureAgent(id, role, level, parentFor, extra) {
+  if (!id || typeof id !== 'string') return null;
+  var ag = S.agents[id];
+  if (!ag) {
+    ag = S.agents[id] = {
+      id: id,
+      role: role || 'agent',
+      roleSeen: !!role,
+      level: deriveLevel(role, level),
+      parent: parentFor || (/-collab-\d+$/.test(id) ? id.replace(/-collab-\d+$/, '') : null),
+      skills: [], toolTier: null, inferred: false,
+      status: 'idle', statusText: 'idle',
+      tokens: 0, prompt: 0, completion: 0,
+      step: 0, maxSteps: 0, phase: null, task: null,
+      activity: '', toolLabel: '', stepLabel: '',
+      tools: [], tasks: [], routing: null, routingHist: [],
+      retries: 0, rerouted: false
     };
-    // Fallback = the five eval-mode roles from harness.yaml.
-    const DEFAULT_AGENTS = [
-      { agent_id: 'architect-1', role: 'architect' },
-      { agent_id: 'mgr-1', role: 'manager' },
-      { agent_id: 'locator-1', role: 'locator' },
-      { agent_id: 'impl-1', role: 'implementer' },
-      { agent_id: 'ver-1', role: 'verifier' },
-    ];
+  } else {
+    if (role && !ag.roleSeen) { ag.role = role; ag.roleSeen = true; ag.inferred = false; }
+    if (level != null) ag.level = level;
+    if (parentFor) ag.parent = parentFor;
+  }
+  if (extra) {
+    if (Array.isArray(extra.skills)) ag.skills = extra.skills.filter(Boolean);
+    if (extra.toolTier != null) ag.toolTier = extra.toolTier;
+    if (extra.inferred) ag.inferred = true;
+  }
+  return ag;
+}
+function managerRef() {
+  var l2 = Object.keys(S.agents).filter(function (i) { return S.agents[i].level === 2; });
+  if (l2.length) return S.agents[l2[0]];
+  // assignments are manager actions: if no L2 is known yet, derive the
+  // canonical manager so the org tree keeps its Architect→Manager→L3 shape.
+  return ensureAgent('mgr-1', 'manager', 2, null, { inferred: true });
+}
+function ensureSubtask(id) {
+  if (!id) return null;
+  var st = S.subtasks[id];
+  if (!st) {
+    st = S.subtasks[id] = { id: id, title: '', specialty: '', complexity: 0, files: [], depends_on: [], acceptance: '', status: 'pending', agent: null, batch: null, routing: null, retries: 0, note: '' };
+    S.subtaskOrder.push(id);
+  }
+  return st;
+}
 
-    function renderAgents(agents) {
-      const roster = document.getElementById('agentRoster');
-      document.getElementById('agentCount').textContent = agents.length + ' Agents';
-      roster.innerHTML = '';
-      for (const agent of agents) {
-        const meta = ROLE_META[agent.role] || { icon: '🔧', name: agent.role, sub: agent.agent_id };
-        const item = document.createElement('div');
-        item.className = 'agent-item';
-        item.innerHTML = `
-          <div class="agent-info">
-            <div class="agent-avatar">${meta.icon}</div>
-            <div>
-              <div class="agent-name">${meta.name} <span class="agent-id">${agent.agent_id}</span></div>
-              <div class="agent-role">${meta.sub}</div>
-            </div>
-          </div>
-          <span class="badge badge-idle" id="agent-${agent.agent_id}">Ready</span>`;
-        roster.appendChild(item);
-      }
-    }
+/* ======================= tree rendering ======================= */
+function buildTreeModel() {
+  var ids = Object.keys(S.agents);
+  var l1 = ids.filter(function (i) { return S.agents[i].level === 1; });
+  var l2 = ids.filter(function (i) { return S.agents[i].level === 2; });
+  var rest = ids.filter(function (i) { var lv = S.agents[i].level; return lv >= 3 || lv == null; });
+  var rootAnchor = l1[0] || null;
+  var mgrAnchor = l2[0] || rootAnchor;
+  var nodes = {};
+  ids.forEach(function (i) { nodes[i] = { id: i, kids: [] }; });
+  var roots = [];
+  function attach(child, parentId) {
+    var p = nodes[parentId];
+    if (!p || parentId === child) { roots.push(nodes[child]); return; }
+    // cycle guard: walk up from the proposed parent
+    var cur = p, guard = 0;
+    while (cur && guard++ < 32) { if (cur.id === child) { roots.push(nodes[child]); return; } cur = cur.parent; }
+    p.kids.push(nodes[child]);
+    nodes[child].parent = p;
+  }
+  l1.forEach(function (i) { roots.push(nodes[i]); });
+  l2.forEach(function (i) { if (rootAnchor && i !== rootAnchor) attach(i, rootAnchor); else roots.push(nodes[i]); });
+  rest.forEach(function (i) {
+    var ag = S.agents[i];
+    var p = (ag.parent && nodes[ag.parent] && ag.parent !== i) ? ag.parent : null;
+    if (!p) p = (mgrAnchor && i !== mgrAnchor) ? mgrAnchor : (rootAnchor && i !== rootAnchor ? rootAnchor : null);
+    if (p) attach(i, p); else roots.push(nodes[i]);
+  });
+  return roots;
+}
+function renderTree() {
+  var tree = $('agentTree');
+  var roots = buildTreeModel();
+  var count = Object.keys(S.agents).length;
+  $('agentCount').textContent = count + (count === 1 ? ' agent' : ' agents');
+  if (!roots.length) {
+    tree.innerHTML = '<div class="tree-empty">' + (S.mode === 'replay' ? 'awaiting events…' : 'no agents — awaiting roster / events') + '</div>';
+    return;
+  }
+  tree.innerHTML = renderNodes(roots, false, 1);
+}
+function renderNodes(list, hasParent, depth) {
+  var out = '';
+  list.forEach(function (n) {
+    var kids = n.kids.length
+      ? '<div class="node-kids">' + renderNodes(n.kids, true, depth + 1) + '</div>'
+      : '';
+    out += '<div class="node' + (hasParent ? ' has-parent' : '') + '">' + cardHtml(S.agents[n.id], depth) + kids + '</div>';
+  });
+  return out;
+}
+function cardHtml(ag, depth) {
+  if (!ag) return '';
+  var skills = ag.skills.slice(0, 3).map(function (s) { return '<span class="sk">' + esc(s) + '</span>'; }).join('');
+  if (ag.skills.length > 3) skills += '<span class="sk more">+' + (ag.skills.length - 3) + '</span>';
+  var taskChips = ag.tasks.map(function (tid) {
+    var st = S.subtasks[tid];
+    var stat = st ? st.status : '';
+    return '<span class="tk tk-' + esc(stat) + '">' + esc(tid) + '</span>';
+  }).join('');
+  var glyph = { idle: '·', thinking: '◐', working: '◑', retry: '↺', blocked: '⊘', done: '✓', failed: '✕' }[ag.status] || '·';
+  var act = ag.activity
+    ? '<div class="activity"><span class="glyph g-' + esc(ag.status) + '">' + glyph + '</span>' + esc(trunc(ag.activity, 46)) + '</div>'
+    : '';
+  var maxAg = 0;
+  Object.keys(S.agents).forEach(function (i) { maxAg = Math.max(maxAg, S.agents[i].tokens || 0); });
+  var denom = Math.max(S.tokens, maxAg, 1);
+  var pct = Math.min(100, Math.round((ag.tokens / denom) * 100));
+  return '' +
+    '<div class="acard st-' + esc(ag.status) + (S.selected === ag.id ? ' selected' : '') + '" data-agent="' + esc(ag.id) + '"' +
+    ' role="treeitem" tabindex="0" aria-selected="' + (S.selected === ag.id) + '" aria-level="' + (depth || 1) + '">' +
+    '<div class="acard-head">' +
+    '<span class="adot d-' + esc(ag.status) + '" title="' + esc(ag.statusText) + '"></span>' +
+    '<span class="aid">' + esc(ag.id) + '</span>' +
+    '<span class="lv">' + (LEVEL_LABEL[ag.level] || 'L?') + '</span>' +
+    (ag.toolTier != null ? '<span class="tier" title="tool tier">T' + esc(String(ag.toolTier)) + '</span>' : '') +
+    (ag.inferred ? '<span class="inf" title="derived from events, not the roster">inferred</span>' : '') +
+    '<span class="astat as-' + esc(ag.status) + '">' + esc(ag.statusText) + '</span>' +
+    '</div>' +
+    '<div class="arole">' + esc(ag.role) + (ag.retries ? ' <span class="retry-tag">· ↺ ' + ag.retries + '</span>' : '') + '</div>' +
+    (skills ? '<div class="skills">' + skills + '</div>' : '') +
+    (taskChips ? '<div class="atk-list">' + taskChips + '</div>' : '') +
+    act +
+    '<div class="ameter"><div class="abar"><i style="width:' + pct + '%"></i></div><span class="atok" title="cumulative tokens for this agent">' + fmtTokens(ag.tokens) + ' tok</span></div>' +
+    '</div>';
+}
 
-    async function fetchAgents() {
-      try {
-        const response = await fetch('/api/agents');
-        if (!response.ok) throw new Error('agents endpoint ' + response.status);
-        const body = await response.json();
-        if (Array.isArray(body.agents) && body.agents.length) {
-          renderAgents(body.agents);
-          return;
-        }
-      } catch (err) {
-        console.warn('agent roster fallback:', err.message);
-      }
-      renderAgents(DEFAULT_AGENTS);
-    }
+/* ======================= top bar ======================= */
+function renderTopbar() {
+  $('runIdTop').textContent = S.runId || '—';
+  $('tokenTop').textContent = fmtTokens(S.tokens);
+  $('tokenTop').title = S.tokens.toLocaleString() + ' total tokens (cumulative, set from tokens.usage)';
+  $('govChip').innerHTML = 'governor <b>' + esc(S.governor || '—') + '</b>';
+  var chip = $('stateChip');
+  chip.textContent = S.runState;
+  chip.className = 'chip state ' + ({
+    IDLE: 'idle', RUNNING: 'running', VERIFIED: 'verified',
+    'NOT VERIFIED': 'notverified', FAILED: 'failed'
+  }[S.runState] || 'idle');
+  $('metaRunId').textContent = S.runId || '—';
+  $('metaState').textContent = S.runState;
+  $('metaEvents').textContent = String(S.eventCount);
+}
+function tickTimer() {
+  var el = $('runTimer');
+  if (!S.runStartTs) { el.textContent = '—'; return; }
+  var end = S.runEndTs || Date.now();
+  el.textContent = fmtClock((end - S.runStartTs) / 1000);
+}
+function setWsStatus(state, text) {
+  var dot = $('wsDot'), t = $('wsText');
+  dot.className = 'wsdot ' + state;
+  t.textContent = text || state;
+}
 
-    // ---- helpers -------------------------------------------------------------
-    function setPreset(text) {
-      document.getElementById('issueInput').value = text;
-    }
+/* ======================= plan tab ======================= */
+function renderPlanHead() {
+  var el = $('planHead');
+  var prof = S.profile || {};
+  var chips = '';
+  var langs = Object.keys(prof.languages || {});
+  if (langs.length) {
+    chips += '<span class="ph-chip"><b>' + esc(langs.slice(0, 3).map(function (l) { return l + ' ×' + prof.languages[l]; }).join(', ')) + '</b></span>';
+  }
+  if (prof.test_framework) chips += '<span class="ph-chip">tests <b>' + esc(prof.test_framework) + '</b></span>';
+  if (prof.files != null) chips += '<span class="ph-chip"><b>' + num(prof.files) + '</b> files</span>';
+  if (prof.loc != null) chips += '<span class="ph-chip"><b>' + num(prof.loc).toLocaleString() + '</b> loc</span>';
+  if (S.reproductionTest) chips += '<span class="ph-chip repro" title="reproduction test">⤓ ' + esc(S.reproductionTest) + '</span>';
+  var total = S.subtaskOrder.length;
+  var done = S.subtaskOrder.filter(function (i) { return S.subtasks[i].status === 'done'; }).length;
+  if (total) chips += '<span class="ph-chip"><b>' + done + '/' + total + '</b> subtasks done</span>';
+  if (!chips) { el.innerHTML = '<div class="dim-note">awaiting plan…</div>'; return; }
+  el.innerHTML =
+    '<div class="ph-chips">' + chips + '</div>' +
+    (S.issue ? '<div class="ph-issue" title="' + esc(trunc(S.issue, 600)) + '">' + esc(S.issue) + '</div>' : '');
+}
+function renderPlan() {
+  renderPlanHead();
+  var cols = { pending: [], running: [], done: [], failed: [] };
+  S.subtaskOrder.forEach(function (id) {
+    var st = S.subtasks[id];
+    (cols[st.status] || cols.pending).push(st);
+  });
+  Object.keys(cols).forEach(function (status) {
+    $('kc-' + status).textContent = String(cols[status].length);
+    $('kcb-' + status).innerHTML = cols[status].length
+      ? cols[status].map(subtaskCard).join('')
+      : '<div class="dim-note" style="padding:10px 6px;">—</div>';
+  });
+}
+function subtaskCard(st) {
+  var dots = '';
+  for (var i = 0; i < 10; i++) dots += '<i class="' + (i < num(st.complexity) ? 'on' : '') + '"></i>';
+  var files = (st.files || []).map(function (f) { return '<span title="' + esc(f) + '">' + esc(f) + '</span>'; }).join('');
+  var foot = '';
+  if (st.agent) foot += '<span class="st-agent" data-agent="' + esc(st.agent) + '">→ ' + esc(st.agent) + '</span>';
+  if (st.routing && st.routing.total != null) foot += '<span class="st-score">score ' + num(st.routing.total).toFixed(2) + '</span>';
+  if (st.retries) foot += '<span class="st-retry">↺ ' + st.retries + '</span>';
+  if (st.note) foot += '<span class="st-note">' + esc(trunc(st.note, 40)) + '</span>';
+  return '' +
+    '<div class="stcard stc-' + esc(st.status) + '" data-task="' + esc(st.id) + '">' +
+    '<div class="st-top">' +
+    '<span class="st-id">' + esc(st.id) + '</span>' +
+    (st.specialty ? '<span class="st-sp">' + esc(st.specialty) + '</span>' : '') +
+    '<span class="dots" title="complexity ' + num(st.complexity) + '/10">' + dots + '</span>' +
+    '</div>' +
+    (st.title ? '<div class="st-title">' + esc(st.title) + '</div>' : '') +
+    (files ? '<div class="st-files">' + files + '</div>' : '') +
+    '<div class="st-meta">' +
+    ((st.depends_on && st.depends_on.length) ? 'depends: ' + st.depends_on.map(esc).join(', ') : 'no deps') +
+    (st.batch != null ? ' · batch ' + esc(String(st.batch)) : '') +
+    '</div>' +
+    (foot ? '<div class="st-foot">' + foot + '</div>' : '') +
+    (st.acceptance
+      ? '<details class="st-acc"' + (S.openAcc[st.id] ? ' open' : '') + ' data-task="' + esc(st.id) + '"><summary>acceptance</summary><div>' + esc(st.acceptance) + '</div></details>'
+      : '') +
+    '</div>';
+}
 
-    function setAgentStatus(agentId, text, badgeClass) {
-      const el = document.getElementById('agent-' + agentId);
-      if (!el) return;
-      el.textContent = text;
-      el.className = `badge ${badgeClass}`;
-    }
+/* ======================= agent tab ======================= */
+function renderAgentTab() {
+  if (S.tab !== 'agent') return;
+  var wrap = $('agentWorkspace');
+  var ag = S.selected ? S.agents[S.selected] : null;
+  if (!ag) {
+    wrap.innerHTML = '<div class="dim-note pad">Select an agent card in the hierarchy to open its workspace.</div>';
+    return;
+  }
+  var skills = ag.skills.map(function (s) { return '<span class="sk">' + esc(s) + '</span>'; }).join(' ');
+  var pct = ag.maxSteps ? Math.min(100, Math.round((ag.step / ag.maxSteps) * 100)) : 0;
+  var rows = ag.tools.slice(-TOOL_RENDER_CAP).map(toolRow).join('');
+  var note = ag.tools.length > TOOL_RENDER_CAP
+    ? ' · showing last ' + TOOL_RENDER_CAP : '';
+  wrap.innerHTML = '' +
+    '<div class="aw-head">' +
+    '<div class="aw-title">' +
+    '<span class="adot d-' + esc(ag.status) + '"></span>' +
+    '<span class="aw-id">' + esc(ag.id) + '</span>' +
+    '<span class="lv">' + (LEVEL_LABEL[ag.level] || 'L?') + '</span>' +
+    (ag.toolTier != null ? '<span class="tier">T' + esc(String(ag.toolTier)) + '</span>' : '') +
+    (ag.rerouted ? '<span class="inf">rerouted in · L2</span>' : '') +
+    (ag.inferred ? '<span class="inf">inferred</span>' : '') +
+    '<span class="aw-status as-' + esc(ag.status) + '">' + esc(ag.statusText) + '</span>' +
+    '</div>' +
+    '<div class="aw-sub">' + esc(ag.role) + (skills ? ' &nbsp;' + skills : '') + '</div>' +
+    '<div class="aw-stats">' +
+    '<span title="cumulative tokens for this agent (set from agent.usage)">⚡ ' + fmtTokens(ag.tokens) + ' tok</span>' +
+    '<span title="last model call">last call ' + fmtTokens(ag.prompt) + '↑ / ' + fmtTokens(ag.completion) + '↓</span>' +
+    (ag.retries ? '<span class="warn">↺ ' + ag.retries + ' retries</span>' : '') +
+    (ag.task ? '<span>task ' + esc(ag.task) + '</span>' : '') +
+    '</div>' +
+    '<div class="aw-prog">' +
+    '<div class="aw-prog-label"><span>progress</span><span>' + (ag.stepLabel || 'no steps yet') + (ag.phase ? ' · ' + esc(ag.phase) : '') + '</span></div>' +
+    '<div class="pbar"><i style="width:' + pct + '%"></i></div>' +
+    '</div>' +
+    '</div>' +
+    routingBanner(ag) +
+    (ag.routingHist.length
+      ? '<div class="del-hist">' + ag.routingHist.map(function (h) {
+          return '<span class="dh">' + esc(h.task) + ' · ' + (h.total != null ? num(h.total).toFixed(2) : '?') + (h.batch != null ? ' · b' + h.batch : '') + '</span>';
+        }).join('') + '</div>'
+      : '') +
+    '<div class="aw-log-wrap">' +
+    '<div class="aw-log-head">tool calls · ' + ag.tools.length + note + '</div>' +
+    '<div class="aw-log">' + (rows || '<div class="dim-note">no tool calls yet</div>') + '</div>' +
+    '</div>';
+  var log = wrap.querySelector('.aw-log');
+  if (log) log.scrollTop = log.scrollHeight;
+}
+function toolRow(t) {
+  return '<div class="trow ' + (t.ok ? 'ok' : 'fail') + '">' +
+    '<span class="t-time">' + esc(timeStr(t.ts)) + (t.step ? ' ·s' + esc(String(t.step)) : '') + '</span>' +
+    '<span class="t-tool">' + esc(t.tool) + '</span>' +
+    '<span class="t-args" title="' + esc(t.args) + '">' + esc(t.args) + '</span>' +
+    '<span class="t-ok">' + (t.ok ? '✓' : '✗') + '</span>' +
+    '<span class="t-ms">' + esc(fmtMs(t.ms)) + '</span>' +
+    '<span class="t-res" title="' + esc(t.result) + '">' + esc(trunc(t.result, 72)) + '</span>' +
+    '</div>';
+}
+function routingBanner(ag) {
+  if (!ag.routing) return '';
+  var r = ag.routing.routing || {};
+  var factors = [
+    ['specialty', r.specialty, 0.4],
+    ['availability', r.availability, 0.2],
+    ['load', r.load, 0.2],
+    ['capability', r.capability, 0.2]
+  ];
+  var rows = factors.map(function (f) {
+    var val = num(f[1]), max = f[2];
+    var w = Math.max(0, Math.min(100, Math.round((val / max) * 100)));
+    return '<div class="df"><span class="df-l">' + f[0] + ' <i>' + Math.round(max * 100) + '%</i></span>' +
+      '<div class="df-bar"><i style="width:' + w + '%"></i></div>' +
+      '<span class="df-v">' + val.toFixed(2) + '</span></div>';
+  }).join('');
+  var total = num(r.total);
+  var totalW = Math.max(0, Math.min(100, Math.round(total * 100)));
+  return '<div class="del-banner">' +
+    '<div class="del-title">Manager delegation ⇥ <b>' + esc(ag.routing.task || '?') + '</b> → <b>' + esc(ag.id) + '</b>' +
+    (ag.routing.batch != null ? ' · batch ' + esc(String(ag.routing.batch)) : '') +
+    ' · score <b>' + total.toFixed(2) + '</b></div>' +
+    '<div class="del-factors">' + rows + '</div>' +
+    '<div class="del-total"><span class="df-l">total assignment score</span>' +
+    '<div class="df-bar"><i style="width:' + totalW + '%"></i></div>' +
+    '<span class="df-v">' + total.toFixed(2) + '</span></div>' +
+    '</div>';
+}
 
-    function resetAgents() {
-      document.querySelectorAll('#agentRoster .badge').forEach((el) => {
-        el.textContent = 'Ready';
-        el.className = 'badge badge-idle';
-      });
-    }
-
-    function setStageStatus(id, ok) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.textContent = ok ? 'Passed' : 'Failed';
-      el.className = `badge ${ok ? 'badge-done' : 'badge-fail'}`;
-    }
-
-    function resetStages() {
-      ['stage-integrity', 'stage-syntax', 'stage-tests', 'stage-review', 'stage-security', 'stage-final']
-        .forEach((id) => {
-          const el = document.getElementById(id);
-          if (el) { el.textContent = 'Pending'; el.className = 'badge badge-idle'; }
-        });
-    }
-
-    // Maps a pipeline stage name ("1-integrity", "2-self-check", ...) onto the
-    // badge id. Names come from verification/pipeline.py stage results.
-    function stageBadgeId(stageName) {
-      const name = String(stageName || '').toLowerCase();
-      if (name.includes('integrity')) return 'stage-integrity';
-      if (name.includes('self-check') || name.includes('syntax')) return 'stage-syntax';
-      if (name.includes('local-tests') || name.includes('test')) return 'stage-tests';
-      if (name.includes('review') && !name.includes('final')) return 'stage-review';
-      if (name.includes('security') || name.includes('secret')) return 'stage-security';
-      if (name.includes('final')) return 'stage-final';
-      return null;
-    }
-
-    function setPipelineState(text, color) {
-      const el = document.getElementById('metricStatus');
-      el.textContent = text;
-      el.style.color = color;
-    }
-
-    function escapeHtml(value) {
-      const div = document.createElement('div');
-      div.textContent = String(value);
-      return div.innerHTML;
-    }
-
-    // ---- WebSocket -----------------------------------------------------------
-    function connectWS() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.host || 'localhost:8080';
-      const wsUrl = `${protocol}//${host}/ws`;
-
-      const statusText = document.getElementById('wsStatusText');
-      const pulse = document.getElementById('pulseIndicator');
-
-      statusText.textContent = 'Connecting...';
-      pulse.className = 'pulse';
-
-      try {
-        socket = new WebSocket(wsUrl);
-
-        socket.onopen = () => {
-          statusText.textContent = 'Connected (ws://' + host + '/ws)';
-          pulse.className = 'pulse connected';
-        };
-
-        socket.onmessage = (event) => {
-          handleIncomingEvent(event.data);
-        };
-
-        socket.onclose = () => {
-          statusText.textContent = 'Disconnected';
-          pulse.className = 'pulse';
-          setTimeout(connectWS, 3000);
-        };
-
-        socket.onerror = () => {
-          socket.close();
-        };
-      } catch (err) {
-        console.error('WebSocket connection error:', err);
-      }
-    }
-
-    function reconnectWS() {
-      if (socket) socket.close();
-      connectWS();
-    }
-
-    // ---- event handling ------------------------------------------------------
-    function handleIncomingEvent(raw) {
-      let data = {};
-      try {
-        data = JSON.parse(raw);
-      } catch (e) {
-        data = { event: 'raw', message: raw };
-      }
-
-      eventCount++;
-      document.getElementById('metricEvents').textContent = eventCount;
-      document.getElementById('feedCount').textContent = `${eventCount} events`;
-
-      if (data.run_id) {
-        activeRunId = data.run_id;
-        document.getElementById('metricRunId').textContent = activeRunId;
-      }
-
-      if (data.usage && data.usage.total_tokens !== undefined) {
-        // Cumulative totals from the engine: SET, never accumulate.
-        document.getElementById('metricTokens').textContent =
-          Number(data.usage.total_tokens).toLocaleString();
-      }
-
-      renderEventToFeed(data);
-
-      const evName = data.event || '';
-
-      if (evName === 'run.start') {
-        setPipelineState('RUNNING', '#38bdf8');
-        resetStages();
-        resetAgents();
-        setAgentStatus('architect-1', 'Planning', 'badge-active');
-      } else if (evName === 'architect.plan') {
-        setAgentStatus('architect-1', 'Planned', 'badge-done');
-        setAgentStatus('mgr-1', 'Routing', 'badge-active');
-      } else if (evName === 'specialist.assigned') {
-        setAgentStatus('mgr-1', 'Routing', 'badge-active');
-        if (data.agent) setAgentStatus(data.agent, 'Working', 'badge-active');
-      } else if (evName === 'specialist.result') {
-        const ok = data.success !== false;
-        if (data.task) {
-          // attribute the result to whichever agent handled the task
-          const assigned = lastAssignedFor(data.task);
-          if (assigned) setAgentStatus(assigned, ok ? 'Completed' : 'Failed', ok ? 'badge-done' : 'badge-fail');
-        }
-      } else if (evName === 'verification.stage') {
-        setAgentStatus('ver-1', 'Verifying', 'badge-active');
-        const badgeId = stageBadgeId(data.stage);
-        if (badgeId) setStageStatus(badgeId, data.passed !== false);
-      } else if (evName === 'tokens.usage') {
-        // handled above (meter set)
-      } else if (evName === 'task.completed') {
-        const ok = data.result ? data.result.success !== false : true;
-        finishRun(ok, data.result || {});
-      } else if (evName === 'run.end') {
-        const ok = data.success !== false;
-        finishRun(ok, null);
-      }
-    }
-
-    const assignmentByTask = {};
-    function lastAssignedFor(taskId) {
-      return assignmentByTask[taskId] || null;
-    }
-
-    function finishRun(ok, result) {
-      setPipelineState(ok ? 'SUCCESS' : 'FAILED', ok ? '#34d399' : '#f87171');
-      resetAgents();
-      const verifierBadge = document.getElementById('agent-ver-1');
-      if (verifierBadge) {
-        verifierBadge.textContent = ok ? 'Verified' : 'Rejected';
-        verifierBadge.className = `badge ${ok ? 'badge-done' : 'badge-fail'}`;
-      }
-      if (result && result.outcome) {
-        const box = document.getElementById('diffBox');
-        const status = document.getElementById('diffStatus');
-        if (status) status.textContent = result.outcome;
-      }
-      if (activeRunId) loadDiff(activeRunId);
-    }
-
-    // ---- event feed rendering ------------------------------------------------
-    function feedClassFor(data) {
-      const evName = data.event || '';
-      if (evName === 'run.start') return 'event-run-start';
-      if (evName === 'architect.profile' || evName === 'architect.plan' || evName === 'baseline.captured') return 'event-plan';
-      if (evName === 'specialist.assigned' || evName === 'specialist.collaborator_added') return 'event-specialist';
-      if (evName === 'specialist.result') return data.success ? 'event-specialist-result-ok' : 'event-specialist-result-fail';
-      if (evName === 'verification.stage') return data.passed !== false ? 'event-verification-pass' : 'event-verification-fail';
-      if (evName === 'tokens.usage') return 'event-tokens';
-      if (evName.startsWith('recovery.')) return 'event-recovery';
-      if (evName === 'run.end') return data.success ? 'event-run-end-ok' : 'event-run-end-fail';
-      if (evName === 'task.completed') {
-        const ok = data.result ? data.result.success !== false : true;
-        return ok ? 'event-run-end-ok' : 'event-run-end-fail';
-      }
-      return '';
-    }
-
-    function describeEvent(data) {
-      const evName = data.event || 'engine.event';
-      const icons = {
-        'run.start': '▶', 'run.end': '■', 'architect.profile': '🏛', 'architect.plan': '🗺',
-        'baseline.captured': '📏', 'specialist.assigned': '🛠', 'specialist.result': '✓',
-        'specialist.collaborator_added': '👥', 'verification.stage': '🧪', 'tokens.usage': '⚡',
-        'task.completed': '🏁',
-      };
-      const icon = icons[evName] || '•';
-
-      let detail = '';
-      if (evName === 'run.start') {
-        detail = data.issue ? `Issue: "${String(data.issue).slice(0, 160)}"` : 'run started';
-      } else if (evName === 'architect.profile') {
-        const profile = data.profile || {};
-        const langs = (profile.languages || []).join(', ') || '?';
-        detail = `Repo profile — languages: ${langs}, build: ${profile.build_system || 'n/a'}`;
-      } else if (evName === 'architect.plan') {
-        const subtasks = data.subtasks || [];
-        detail = subtasks.length
-          ? `Plan: ${subtasks.length} subtask(s) — ${subtasks.join(', ')}`
-          : 'Plan: no subtasks emitted';
-      } else if (evName === 'baseline.captured') {
-        detail = `Baseline: runnable=${data.runnable}, pre-existing failures: ${data.pre_existing_failures}`;
-      } else if (evName === 'specialist.assigned') {
-        if (data.task) assignmentByTask[data.task] = data.agent;
-        detail = `Task ${data.task || '?'} assigned to ${data.agent || '?'}`;
-      } else if (evName === 'specialist.result') {
-        const status = data.success ? 'completed' : 'FAILED';
-        detail = `Task ${data.task || '?'} ${status}: ${String(data.summary || '').slice(0, 180)}`;
-      } else if (evName === 'specialist.collaborator_added') {
-        detail = `Collaborator ${data.agent} spawned for ${data.for}`;
-      } else if (evName === 'verification.stage') {
-        const verdict = data.passed !== false ? 'PASS' : 'FAIL';
-        detail = `Stage ${data.stage}: ${verdict} — ${String(data.detail || '').slice(0, 140)}`;
-      } else if (evName === 'tokens.usage') {
-        const usage = data.usage || {};
-        detail = `Tokens so far: ${Number(usage.total_tokens || 0).toLocaleString()} ` +
-          `(prompt ${Number(usage.prompt_tokens || 0).toLocaleString()} + completion ${Number(usage.completion_tokens || 0).toLocaleString()}) — mode: ${data.governor_mode || 'normal'}`;
-      } else if (evName === 'recovery.l1_retry') {
-        detail = `L1 self-repair attempt ${data.attempt} for ${data.task} (${data.error_type || 'error'})`;
-      } else if (evName === 'recovery.l2_reroute') {
-        detail = `L2 re-route for ${data.task}`;
-      } else if (evName === 'recovery.l2_guidance') {
-        detail = `L2 manager guidance for ${data.task}`;
-      } else if (evName === 'recovery.l3_replan') {
-        detail = `L3 architect re-plan for ${data.task}`;
-      } else if (evName === 'run.end') {
-        detail = data.success ? 'Run finished successfully' : 'Run finished with failures';
-      } else if (evName === 'task.completed') {
-        const outcome = data.result ? (data.result.outcome || 'finished') : 'finished';
-        detail = `Outcome: ${outcome}`;
-      } else {
-        detail = JSON.stringify(data);
-      }
-      return { icon, evName, detail };
-    }
-
-    function renderEventToFeed(data) {
-      const feed = document.getElementById('activityFeed');
-      if (eventCount === 1) {
-        feed.innerHTML = '';
-      }
-
-      const card = document.createElement('div');
-      const timeStr = new Date().toLocaleTimeString();
-      const { icon, evName, detail } = describeEvent(data);
-
-      card.className = 'event-card ' + feedClassFor(data);
-      card.innerHTML = `
-        <div class="event-meta">
-          <span>[${timeStr}] <strong>${icon} ${escapeHtml(evName)}</strong></span>
-          <span>${escapeHtml(data.run_id || activeRunId || '—')}</span>
-        </div>
-        <div class="event-detail">${escapeHtml(detail)}</div>`;
-
-      feed.insertBefore(card, feed.firstChild);
-    }
-
-    // ---- patch diff ----------------------------------------------------------
-    async function loadDiff(runId) {
-      const box = document.getElementById('diffBox');
-      const status = document.getElementById('diffStatus');
-      try {
-        const response = await fetch(`/api/evidence/${encodeURIComponent(runId)}/file/patch.diff`);
-        const body = await response.json();
-        if (!body.found) {
-          box.textContent = body.content || 'No patch produced for this run (empty diff).';
-          if (status) status.textContent = 'No patch';
-          return;
-        }
-        const diffText = body.content || '';
-        if (status) status.textContent = `run ${runId}`;
-        renderDiff(box, diffText);
-      } catch (err) {
-        box.textContent = 'Could not load patch: ' + err.message;
-      }
-    }
-
-    function renderDiff(box, diffText) {
-      box.innerHTML = '';
-      if (!diffText.trim()) {
-        box.textContent = 'Empty diff — no file changes in this run.';
+/* ======================= diff tab ======================= */
+function resetDiffTab() {
+  $('diffStatus').textContent = 'awaiting run end…';
+  $('diffBody').innerHTML = '<div class="dim-note">awaiting patch…</div>';
+}
+function loadDiff() {
+  var body = $('diffBody'), status = $('diffStatus');
+  if (!S.runId) { status.textContent = 'no active run'; return; }
+  status.textContent = 'fetching…';
+  body.innerHTML = '<div class="dim-note">fetching patch…</div>';
+  fetch('/api/evidence/' + encodeURIComponent(S.runId) + '/file/patch.diff')
+    .then(function (r) {
+      if (!r.ok) throw new Error('gateway answered ' + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      if (!data || data.found === false) {
+        status.textContent = 'no patch';
+        body.innerHTML = '<div class="dim-note">' + esc(data && data.content ? data.content : 'No patch produced for this run (empty diff).') + '</div>';
         return;
       }
-      const lines = diffText.split('\n');
-      const MAX_LINES = 400;
-      for (const line of lines.slice(0, MAX_LINES)) {
-        const div = document.createElement('div');
-        if (line.startsWith('+++') || line.startsWith('---')) div.className = 'diff-file';
-        else if (line.startsWith('@@')) div.className = 'diff-hunk';
-        else if (line.startsWith('+')) div.className = 'diff-add';
-        else if (line.startsWith('-')) div.className = 'diff-del';
-        div.textContent = line || ' ';
-        box.appendChild(div);
-      }
-      if (lines.length > MAX_LINES) {
-        const note = document.createElement('div');
-        note.style.color = 'var(--text-dim)';
-        note.textContent = `… ${lines.length - MAX_LINES} more lines truncated (full diff in evidence pack)`;
-        box.appendChild(note);
-      }
-    }
-
-    // ---- task launching ------------------------------------------------------
-    function evidenceLinks(runId) {
-      const links = ['patch.diff', 'test-report.md', 'summary.md', 'token-report.json'];
-      return links.map((name) =>
-        `<a class="evidence-link" target="_blank" rel="noopener" ` +
-        `href="/api/evidence/${encodeURIComponent(runId)}/file/${name}">${name}</a>`
-      ).join('');
-    }
-
-    function showRunResult(ok, runId, outcome, detail) {
-      const banner = document.getElementById('runResult');
-      banner.className = 'run-result visible ' + (ok ? 'ok' : 'fail');
-      banner.innerHTML = `
-        <div class="outcome-line">${ok ? '✅' : '❌'} ${escapeHtml(outcome)}</div>
-        <div class="meta-line">run ${escapeHtml(runId || '—')}</div>
-        ${detail ? `<div class="event-detail">${escapeHtml(detail)}</div>` : ''}
-        <div class="evidence-links">${runId ? evidenceLinks(runId) : ''}</div>`;
-    }
-
-    async function launchTask() {
-      const issue = document.getElementById('issueInput').value.trim();
-      const repoRoot = document.getElementById('repoInput').value.trim() || 'fixtures/mini-repo';
-      const btn = document.getElementById('launchBtn');
-      const btnContent = document.getElementById('launchBtnContent');
-
-      if (!issue) {
-        showRunResult(false, null, 'Missing issue', 'Enter an issue description before launching the pipeline.');
-        return;
-      }
-
-      btn.disabled = true;
-      btnContent.textContent = 'Pipeline running — watch the stream →';
-
-      try {
-        const response = await fetch('/api/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ issue: issue, repo_root: repoRoot }),
-        });
-        const body = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-          const detail = body.error || body.detail || `gateway answered ${response.status}`;
-          showRunResult(false, null, 'Launch failed', detail);
-          setPipelineState('FAILED', '#f87171');
-        } else {
-          const result = body.result || {};
-          showRunResult(
-            result.success !== false,
-            body.run_id || result.run_id,
-            result.outcome || 'Run finished',
-            (result.flags || []).join(' · ')
-          );
-          if (body.run_id) loadDiff(body.run_id);
-        }
-      } catch (err) {
-        showRunResult(false, null, 'Launch failed', err.message + ' — is the gateway (and orchestrator) running?');
-        setPipelineState('FAILED', '#f87171');
-      } finally {
-        btn.disabled = false;
-        btnContent.textContent = 'Run Autonomous Pipeline';
-      }
-    }
-
-    // Initialize on load
-    window.addEventListener('DOMContentLoaded', () => {
-      renderAgents(DEFAULT_AGENTS);
-      fetchAgents();
-      connectWS();
+      status.textContent = 'run ' + S.runId;
+      renderDiff((data && data.content) || '');
+    })
+    .catch(function (err) {
+      status.textContent = 'unavailable';
+      body.innerHTML = '<div class="dim-note">Patch unavailable: ' + esc(err.message) +
+        (S.mode === 'replay' ? '<br>(replay mode — the fixture run id is not registered with the gateway)' : '') + '</div>';
     });
-  </script>
+}
+function renderDiff(text) {
+  var body = $('diffBody');
+  if (!text || !text.trim()) {
+    body.innerHTML = '<div class="dim-note">Empty diff — no file changes in this run.</div>';
+    return;
+  }
+  var lines = text.split('\n');
+  var MAX = 1000;
+  var html = '', fileCount = 0, openFresh = false;
+  function nameFromPlus(line) {
+    var n = String(line).replace(/^\+\+\+\s+/, '').split('\t')[0].replace(/^[ab]\//, '');
+    return n || line;
+  }
+  function nameFromGit(line) {
+    var m = String(line).match(/^diff --git a\/\S+ b\/(\S+)/);
+    return m ? m[1] : line;
+  }
+  for (var i = 0; i < Math.min(lines.length, MAX); i++) {
+    var line = lines[i];
+    if (line.indexOf('diff --git') === 0) {
+      openFresh = true; fileCount++;
+      html += '<div class="diff-file">' + esc(nameFromGit(line)) + '</div>';
+      continue;
+    }
+    if (line.indexOf('---') === 0 && lines[i + 1] && String(lines[i + 1]).indexOf('+++') === 0) {
+      if (!openFresh) { openFresh = true; fileCount++; html += '<div class="diff-file">' + esc(nameFromPlus(lines[i + 1])) + '</div>'; }
+      i++;  // consume the '---' pair line; the '+++' line is skipped below
+      continue;
+    }
+    if (line.indexOf('+++') === 0) {
+      if (!openFresh) { openFresh = true; fileCount++; html += '<div class="diff-file">' + esc(nameFromPlus(line)) + '</div>'; }
+      continue;
+    }
+    // git extended headers that are not diff content
+    if (/^(index |old mode|new mode|similarity index|dissimilarity index|rename (from|to)|copy (from|to)|(deleted|new) file|Binary files|GIT binary patch)/.test(line) || line.indexOf('\\ No newline') === 0) {
+      continue;
+    }
+    openFresh = false;
+    if (line.indexOf('@@') === 0) { html += '<div class="diff-hunk">' + esc(line) + '</div>'; continue; }
+    if (line.indexOf('+') === 0) { html += '<div class="dl dl-add">' + esc(line) + '</div>'; continue; }
+    if (line.indexOf('-') === 0) { html += '<div class="dl dl-del">' + esc(line) + '</div>'; continue; }
+    html += '<div class="dl dl-ctx">' + esc(line) + '</div>';
+  }
+  if (lines.length > MAX) {
+    html += '<div class="diff-trunc">… ' + (lines.length - MAX) + ' more lines truncated (full diff in the evidence pack)</div>';
+  }
+  body.innerHTML = html || '<div class="dim-note">Empty diff.</div>';
+}
+
+/* ======================= verify tab ======================= */
+function renderVerify() {
+  var steps = $('vfySteps');
+  var names = STAGES_CANON.slice();
+  Object.keys(S.stages).forEach(function (n) { if (names.indexOf(n) < 0) names.push(n); });
+  var pass = 0, fail = 0, skipped = 0;
+  var html = names.map(function (name) {
+    var rec = S.stages[name];
+    var state = 'pending';
+    if (rec) {
+      if (rec.passed && /^\s*skipped/i.test(rec.detail || '')) state = 'skipped';
+      else if (rec.passed) state = 'pass';
+      else state = 'fail';
+    }
+    if (state === 'pass') pass++; else if (state === 'fail') fail++; else if (state === 'skipped') skipped++;
+    var icon = state === 'pass' ? '✓' : state === 'fail' ? '✕' : state === 'skipped' ? '⊘' : '·';
+    var dur = rec && rec.duration != null ? fmtDur(rec.duration) : '';
+    var detail = rec ? (rec.detail || '') : 'waiting…';
+    var blocking = rec ? rec.blocking !== false : true;
+    return '<li class="vstep ' + state + '">' +
+      '<span class="vicon">' + icon + '</span>' +
+      '<div class="vtitle">' + esc(name) +
+      '<span class="vblock ' + (blocking ? 'blk' : 'adv') + '">' + (blocking ? 'blocking' : 'advisory') + '</span>' +
+      (dur ? '<span class="vdur">' + dur + '</span>' : '') +
+      '</div>' +
+      '<div class="vdetail">' + esc(detail) + '</div>' +
+      '</li>';
+  }).join('');
+  steps.innerHTML = html;
+  // baseline block
+  var bl = $('baselineBlock');
+  if (S.baseline) {
+    var b = S.baseline;
+    bl.innerHTML = '<div class="bl-title">Baseline</div><div class="bl-grid">' +
+      '<div><label>runnable</label><span class="' + (b.runnable !== false ? 'ok-t' : 'fail-t') + '">' + (b.runnable !== false ? '✓ yes' : '✕ no') + '</span></div>' +
+      '<div><label>pre-existing failures</label><span>' + esc(b.pre_existing_failures != null ? b.pre_existing_failures : '—') + '</span></div>' +
+      '<div><label>reproduction test</label><span>' + esc(b.reproduction_test || '—') + '</span></div>' +
+      '</div>';
+  } else {
+    bl.innerHTML = '<div class="bl-title">Baseline</div><div class="no-flags" style="font-family:var(--mono);font-size:11px;">not captured yet</div>';
+  }
+  // verdict banner
+  var vb = $('vfyVerdict');
+  if (S.verdict) {
+    var ok = S.runState === 'VERIFIED';
+    vb.style.display = '';
+    vb.className = 'vfy-verdict ' + (ok ? 'ok' : 'fail');
+    vb.innerHTML = (ok ? 'VERIFIED' : 'NOT VERIFIED') +
+      '<span class="vsub">' + esc(S.verdict) + ' · gates ' + pass + ' pass / ' + fail + ' fail / ' + skipped + ' skipped</span>';
+  } else if (S.runError) {
+    vb.style.display = '';
+    vb.className = 'vfy-verdict fail';
+    vb.innerHTML = 'RUN FAILED' +
+      '<span class="vsub">' + esc((S.runError.stage ? 'stage ' + S.runError.stage + ' · ' : '') + (S.runError.error || '')) + '</span>';
+  } else {
+    vb.style.display = 'none';
+  }
+}
+
+/* ======================= timeline ======================= */
+var EV_ICONS = {
+  'run.start': '▶', 'run.end': '■', 'run.failed': '⨯',
+  'architect.profile': '◈', 'architect.plan': '▤', 'baseline.captured': '◫',
+  'specialist.assigned': '⇥', 'specialist.result': '⊙', 'specialist.collaborator_added': '⊕',
+  'agent.step': '◐', 'agent.tool': '⚙', 'agent.usage': '⚡',
+  'recovery.l1_retry': '↺', 'recovery.l2_guidance': '↯', 'recovery.l2_reroute': '⇄',
+  'recovery.l3_replan': '↻', 'recovery.l3_skipped_budget': '⏻',
+  'verification.stage': '⊙', 'tokens.usage': '⚡'
+};
+function evClass(ev) {
+  var k = ev.event || '';
+  if (k === 'run.start') return 'c-run';
+  if (k === 'run.end') return ev.success !== false ? 'c-ok' : 'c-fail';
+  if (k === 'run.failed') return 'c-fail';
+  if (k === 'architect.profile' || k === 'architect.plan') return 'c-arch';
+  if (k === 'baseline.captured') return 'c-dim';
+  if (k === 'specialist.assigned') return 'c-run';
+  if (k === 'specialist.result') return ev.success !== false ? 'c-ok' : 'c-fail';
+  if (k === 'specialist.collaborator_added') return 'c-ok';
+  if (k === 'agent.step') return 'c-dim';
+  if (k === 'agent.tool') return ev.ok !== false ? 'c-tool' : 'c-fail';
+  if (k === 'agent.usage') return 'c-tok';
+  if (k.indexOf('recovery.') === 0) return 'c-warn';
+  if (k === 'verification.stage') return (ev.passed !== false && /^\s*skipped/i.test(ev.detail || '')) ? 'c-dim' : (ev.passed !== false ? 'c-ok' : 'c-fail');
+  if (k === 'tokens.usage') return 'c-tok';
+  return 'c-dim';
+}
+function describeEvent(ev) {
+  var k = ev.event || 'unknown';
+  var icon = EV_ICONS[k] || '•';
+  var text = '';
+  switch (k) {
+    case 'run.start':
+      var fl = (ev.flags || []).length;
+      text = 'run started' + (fl ? ' · ' + fl + ' security flag' + (fl > 1 ? 's' : '') : '') +
+        ' · issue: “' + trunc(ev.issue || '', 140) + '”';
+      break;
+    case 'run.end':
+      icon = ev.success !== false ? '✓' : '✕';
+      text = (ev.success !== false ? 'VERIFIED — ' : 'NOT VERIFIED — ') + (ev.outcome || '');
+      break;
+    case 'run.failed':
+      text = 'run failed' + (ev.stage ? ' at stage ' + ev.stage : '') + ': ' + (ev.error || 'unknown error');
+      break;
+    case 'architect.profile':
+      var p = ev.profile || {};
+      var langs = Object.keys(p.languages || {}).map(function (l) { return l + '×' + p.languages[l]; }).join(', ');
+      text = 'repo profile — ' + (langs || '?') +
+        (p.test_framework ? ' · ' + p.test_framework : '') +
+        (p.files != null ? ' · ' + p.files + ' files' : '') +
+        (p.loc != null ? ' · ' + Number(p.loc).toLocaleString() + ' loc' : '');
+      break;
+    case 'architect.plan':
+      var ids = (ev.subtasks || []).map(function (t) { return typeof t === 'string' ? t : (t && t.id) || '?'; });
+      text = 'plan — ' + ids.length + ' subtask' + (ids.length === 1 ? '' : 's') + ' (' + ids.join(', ') + ')' +
+        (ev.reproduction_test ? ' · reproduction test ' + ev.reproduction_test : ' · no reproduction test');
+      break;
+    case 'baseline.captured':
+      text = 'baseline — runnable ' + (ev.runnable !== false ? '✓' : '✕') +
+        ' · ' + (ev.pre_existing_failures != null ? ev.pre_existing_failures : '—') + ' pre-existing failure(s)' +
+        ' · reproduction test ' + (ev.reproduction_test || '—');
+      break;
+    case 'specialist.assigned':
+      var r = ev.routing || {};
+      text = (ev.task || '?') + ' ⇥ ' + (ev.agent || '?') + ' (' + (ev.role || '?') + ')' +
+        ' · batch ' + (ev.batch != null ? ev.batch : '?') +
+        (r.total != null ? ' · score ' + num(r.total).toFixed(2) : '');
+      break;
+    case 'specialist.result':
+      icon = ev.success !== false ? '✓' : '✕';
+      text = (ev.task || '?') + ' ' + (ev.success !== false ? 'done' : 'FAILED') + ' by ' + (ev.agent || '?') +
+        ' — ' + trunc(ev.summary || '', 150) +
+        (ev.steps != null ? ' · ' + ev.steps + ' steps' : '') +
+        (ev.tokens != null ? ' · ' + Number(ev.tokens).toLocaleString() + ' tok' : '');
+      break;
+    case 'specialist.collaborator_added':
+      text = 'collaborator ' + (ev.agent || '?') + ' (' + (ev.role || '?') + ') spawned for ' + (ev.for || '?');
+      break;
+    case 'agent.step':
+      text = (ev.agent || '?') + ' step ' + (ev.step != null ? ev.step : '?') + '/' + (ev.max_steps != null ? ev.max_steps : '?') +
+        ' ' + (ev.phase || '') + ' · ' + (ev.task || '');
+      break;
+    case 'agent.tool':
+      icon = ev.ok !== false ? '⚙' : '✕';
+      text = (ev.agent || '?') + ' ' + (ev.tool || '?') + '(' + (ev.args_digest || '') + ') ' +
+        (ev.ok !== false ? '✓' : '✗') + ' ' + fmtMs(ev.duration_ms) + ' → ' + trunc(ev.result_digest || '', 90);
+      break;
+    case 'agent.usage':
+      text = (ev.agent || '?') + ' +' + num(ev.total_tokens).toLocaleString() + ' tok this call' +
+        ' · cumulative ' + num(ev.total_tokens_agent).toLocaleString();
+      break;
+    case 'recovery.l1_retry':
+      text = (ev.task || '?') + ' · ' + (ev.agent || '?') + ' L1 retry attempt ' + (ev.attempt != null ? ev.attempt : '?') +
+        ' (' + (ev.error_type || 'error') + ')';
+      break;
+    case 'recovery.l2_guidance':
+      text = (ev.task || '?') + ' · manager guidance for ' + (ev.agent || '?') + ' — “' + trunc(ev.guidance || '', 120) + '”';
+      break;
+    case 'recovery.l2_reroute':
+      text = (ev.task || '?') + ' · rerouted ' + (ev.agent || '?') + ' → ' + (ev.to || '?') +
+        ' — “' + trunc(ev.guidance || '', 100) + '”';
+      break;
+    case 'recovery.l3_replan':
+      text = (ev.task || '?') + ' · L3 architect re-plan';
+      break;
+    case 'recovery.l3_skipped_budget':
+      text = (ev.task || '?') + ' · L3 skipped — token budget exhausted';
+      break;
+    case 'verification.stage':
+      var skipped = ev.passed !== false && /^\s*skipped/i.test(ev.detail || '');
+      icon = ev.passed !== false ? '✓' : '✕';
+      text = (ev.stage || '?') + ' ' + (skipped ? 'SKIPPED' : (ev.passed !== false ? 'PASS' : 'FAIL')) +
+        (ev.blocking === false ? ' (advisory)' : '') + ' — ' + trunc(ev.detail || '', 160) +
+        (ev.duration_seconds != null ? ' (' + fmtDur(ev.duration_seconds) + ')' : '');
+      break;
+    case 'tokens.usage':
+      var u = ev.usage || {};
+      text = 'usage (' + (ev.phase || '?') + ') — ' + num(u.total_tokens).toLocaleString() + ' total' +
+        ' · governor ' + (ev.governor_mode || '?');
+      break;
+    default:
+      var copy = {};
+      Object.keys(ev).forEach(function (key) { if (key !== '_ts') copy[key] = ev[key]; });
+      text = trunc(JSON.stringify(copy), 200);
+  }
+  return { icon: icon, text: text };
+}
+function appendTimeline(ev) {
+  var feed = $('timelineFeed');
+  var d = describeEvent(ev);
+  var row = document.createElement('div');
+  row.className = 'ev ' + evClass(ev);
+  row.innerHTML =
+    '<span class="ev-t">' + esc(timeStr(ev._ts)) + '</span>' +
+    '<span class="ev-i">' + esc(d.icon) + '</span>' +
+    '<span class="ev-k">' + esc(ev.event || 'unknown') + '</span>' +
+    '<span class="ev-d" title="' + esc(trunc(d.text, 400)) + '">' + esc(d.text) + '</span>';
+  feed.appendChild(row);
+  while (feed.children.length > TIMELINE_CAP) feed.removeChild(feed.firstChild);
+  $('tlCount').textContent = S.eventCount + ' events' + (S.log.length > TIMELINE_CAP ? ' · feed capped at ' + TIMELINE_CAP : '');
+  if (S.timelineFollow) feed.scrollTop = feed.scrollHeight;
+  $('tlFollow').classList.toggle('show', !S.timelineFollow);
+}
+
+/* ======================= security / meta ======================= */
+function renderSecurity() {
+  var el = $('secFlags');
+  if (!S.flags || !S.flags.length) {
+    el.innerHTML = '<div class="no-flags">none</div>';
+    return;
+  }
+  el.innerHTML = S.flags.map(function (f) { return '<div class="flag">' + esc(f) + '</div>'; }).join('');
+}
+function renderMeta() {
+  var links = $('evidenceLinks');
+  if (S.runId && (S.runState === 'VERIFIED' || S.runState === 'NOT VERIFIED' || S.runState === 'FAILED')) {
+    links.hidden = false;
+    links.innerHTML = ['patch.diff', 'test-report.md', 'summary.md', 'token-report.json'].map(function (name) {
+      return '<a target="_blank" rel="noopener" href="/api/evidence/' + encodeURIComponent(S.runId) + '/file/' + name + '">' + name + '</a>';
+    }).join('');
+  } else {
+    links.hidden = true;
+  }
+  renderTopbar();
+}
+
+/* ======================= run reset ======================= */
+function resetRun() {
+  Object.keys(S.agents).forEach(function (id) {
+    var ag = S.agents[id];
+    if (ag.level === 4) { delete S.agents[id]; return; }  // collaborators are per-run
+    ag.status = 'idle'; ag.statusText = 'idle';
+    ag.tokens = 0; ag.prompt = 0; ag.completion = 0;
+    ag.step = 0; ag.maxSteps = 0; ag.phase = null; ag.task = null;
+    ag.activity = ''; ag.toolLabel = ''; ag.stepLabel = '';
+    ag.tools = []; ag.tasks = []; ag.routing = null; ag.routingHist = [];
+    ag.retries = 0; ag.rerouted = false;
+  });
+  S.subtasks = {}; S.subtaskOrder = [];
+  S.stages = {}; S.baseline = null; S.verdict = null; S.runError = null;
+  S.tokens = 0; S.governor = null; S.profile = null; S.reproductionTest = null;
+  S.log = []; S.eventCount = 0; S.openAcc = {};
+  $('timelineFeed').innerHTML = '';
+  $('tlCount').textContent = '0 events';
+  if (S.selected && !S.agents[S.selected]) S.selected = null;
+  resetDiffTab();
+}
+
+/* ======================= the one event pipeline ======================= */
+function onEvent(ev) {
+  if (ev == null || typeof ev !== 'object') ev = { event: 'raw', message: String(ev) };
+  ev._ts = ev._ts || Date.now();
+  if (ev.run_id) S.runId = String(ev.run_id);
+
+  try { dispatch(ev); } catch (err) { console.error('event handler error (event kept in timeline):', err, ev); }
+
+  // bookkeeping AFTER dispatch so run.start's own resetRun() cannot swallow it
+  S.log.push(ev);
+  if (S.log.length > LOG_CAP) S.log.splice(0, S.log.length - LOG_CAP);
+  S.eventCount++;
+
+  appendTimeline(ev);   // every event — known or unknown — lands in the feed
+  renderTopbar();
+}
+
+function dispatch(ev) {
+  var k = ev.event || '';
+  switch (k) {
+    case 'run.start':
+      S.runStartTs = ev._ts; S.runEndTs = null;
+      S.runState = 'RUNNING';
+      S.issue = ev.issue || '';
+      S.flags = Array.isArray(ev.flags) ? ev.flags : [];
+      resetRun();
+      renderSecurity(); renderTree(); renderPlan(); renderVerify(); renderMeta();
+      break;
+
+    case 'architect.profile':
+      S.profile = ev.profile || {};
+      renderPlan();
+      break;
+
+    case 'architect.plan':
+      S.reproductionTest = ev.reproduction_test || null;
+      S.subtasks = {}; S.subtaskOrder = [];
+      (ev.subtasks || []).forEach(function (t) {
+        var o = (typeof t === 'string') ? { id: t } : (t || {});   // v1 bare-string tolerance
+        var id = o.id || ('st-' + (S.subtaskOrder.length + 1));
+        S.subtasks[id] = {
+          id: id, title: o.title || '', specialty: o.specialty || '',
+          complexity: num(o.complexity), files: o.files || [], depends_on: o.depends_on || [],
+          acceptance: o.acceptance || '', status: 'pending', agent: null,
+          batch: o.batch != null ? o.batch : null, routing: null, retries: 0, note: ''
+        };
+        S.subtaskOrder.push(id);
+      });
+      var archPlanner = ensureAgent('architect-1', 'architect', 1);
+      if (archPlanner) { archPlanner.status = 'done'; archPlanner.statusText = 'planned'; }
+      renderTree(); renderPlan();
+      break;
+
+    case 'baseline.captured':
+      S.baseline = ev;
+      renderVerify();
+      break;
+
+    case 'specialist.assigned': {
+      var st = ensureSubtask(ev.task);
+      var mgr = managerRef();
+      if (mgr) { mgr.status = 'working'; mgr.statusText = 'routing'; }
+      var ag = ensureAgent(ev.agent, ev.role);
+      if (st) {
+        st.status = 'running';
+        st.agent = ev.agent || st.agent;
+        if (ev.batch != null) st.batch = ev.batch;
+        if (ev.routing) st.routing = ev.routing;
+      }
+      if (ag) {
+        if (ev.role) { ag.role = ev.role; ag.roleSeen = true; }
+        ag.status = 'working'; ag.statusText = 'working';
+        if (ev.task && ag.tasks.indexOf(ev.task) < 0) ag.tasks.push(ev.task);
+        if (ev.routing) {
+          ag.routing = { task: ev.task, batch: ev.batch, routing: ev.routing };
+          ag.routingHist.push({ task: ev.task, batch: ev.batch, total: ev.routing.total });
+        }
+      }
+      renderTree(); renderPlan(); renderAgentTab();
+      break;
+    }
+
+    case 'specialist.collaborator_added': {
+      ensureAgent(ev.for);
+      var collab = ensureAgent(ev.agent, ev.role, 4, ev.for);
+      if (collab) { collab.status = 'working'; collab.statusText = 'spawned'; }
+      renderTree();
+      break;
+    }
+
+    case 'specialist.result': {
+      var ok = ev.success !== false;
+      var st2 = ensureSubtask(ev.task);
+      var ag2 = ensureAgent(ev.agent, ev.role);
+      if (st2) {
+        st2.status = ok ? 'done' : 'failed';
+        st2.summary = ev.summary || '';
+        if (ok && ev.agent) st2.agent = ev.agent;
+      }
+      if (ag2) {
+        if (ev.role) { ag2.role = ev.role; ag2.roleSeen = true; }
+        if (ev.tokens != null) ag2.tokens = Math.max(ag2.tokens, num(ev.tokens));
+        ag2.status = ok ? 'done' : 'failed';
+        ag2.statusText = ok ? 'done' : 'failed';
+      }
+      renderTree(); renderPlan(); renderAgentTab();
+      break;
+    }
+
+    case 'agent.step': {
+      var ag3 = ensureAgent(ev.agent, ev.role);
+      if (!ag3) break;
+      if (ev.role) { ag3.role = ev.role; ag3.roleSeen = true; }
+      if (ev.step != null) ag3.step = ev.step;
+      if (ev.max_steps != null) ag3.maxSteps = ev.max_steps;
+      ag3.phase = ev.phase || null;
+      if (ev.task) {
+        ag3.task = ev.task;
+        if (ag3.tasks.indexOf(ev.task) < 0) ag3.tasks.push(ev.task);
+      }
+      ag3.status = ev.phase === 'thinking' ? 'thinking' : 'working';
+      ag3.statusText = ev.phase || ag3.status;
+      ag3.stepLabel = 'step ' + ag3.step + '/' + (ag3.maxSteps || '?');
+      updateActivity(ag3);
+      renderTree(); renderAgentTab();
+      break;
+    }
+
+    case 'agent.tool': {
+      var ag4 = ensureAgent(ev.agent, ev.role);
+      if (!ag4) break;
+      ag4.tools.push({
+        ts: ev._ts, tool: ev.tool || '?', args: ev.args_digest || '',
+        ok: ev.ok !== false, ms: ev.duration_ms, result: ev.result_digest || '', step: ev.step
+      });
+      if (ag4.status !== 'thinking') { ag4.status = 'working'; ag4.statusText = 'working'; }
+      if (ev.task && ag4.tasks.indexOf(ev.task) < 0) ag4.tasks.push(ev.task);
+      ag4.toolLabel = (ev.tool || '?') + ' ' + (ev.args_digest || '');
+      updateActivity(ag4);
+      renderTree(); renderAgentTab();
+      break;
+    }
+
+    case 'agent.usage': {
+      var ag5 = ensureAgent(ev.agent);
+      if (!ag5) break;
+      if (ev.total_tokens_agent != null) ag5.tokens = num(ev.total_tokens_agent);   // SET, never summed
+      ag5.prompt = num(ev.prompt_tokens);
+      ag5.completion = num(ev.completion_tokens);
+      renderTree(); renderAgentTab();
+      break;
+    }
+
+    case 'recovery.l1_retry': {
+      var st3 = ensureSubtask(ev.task);
+      var ag6 = ensureAgent(ev.agent);
+      if (st3) { st3.retries = (st3.retries || 0) + 1; st3.status = st3.status === 'pending' ? 'running' : st3.status; }
+      if (ag6) { ag6.retries++; ag6.status = 'retry'; ag6.statusText = 'retry'; }
+      renderTree(); renderPlan(); renderAgentTab();
+      break;
+    }
+
+    case 'recovery.l2_guidance': {
+      var st4 = ensureSubtask(ev.task);
+      var ag7 = ensureAgent(ev.agent);
+      if (st4) st4.note = 'L2: ' + (ev.guidance || '');
+      if (ag7) { ag7.status = 'blocked'; ag7.statusText = 'blocked'; }
+      renderTree(); renderPlan(); renderAgentTab();
+      break;
+    }
+
+    case 'recovery.l2_reroute': {
+      var st5 = ensureSubtask(ev.task);
+      var from = ensureAgent(ev.agent);
+      var to = ensureAgent(ev.to);
+      if (st5) {
+        st5.status = 'running';
+        if (ev.to) st5.agent = ev.to;
+        st5.note = 'L2 reroute: ' + (ev.agent || '?') + ' → ' + (ev.to || '?');
+      }
+      if (from) { from.status = 'idle'; from.statusText = 'rerouted away'; }
+      if (to) {
+        to.status = 'working'; to.statusText = 'rerouted in';
+        to.rerouted = true;
+        if (ev.task && to.tasks.indexOf(ev.task) < 0) to.tasks.push(ev.task);
+      }
+      renderTree(); renderPlan(); renderAgentTab();
+      break;
+    }
+
+    case 'recovery.l3_replan': {
+      var st6 = ensureSubtask(ev.task);
+      if (st6) { st6.status = 'pending'; st6.agent = null; st6.note = 'L3 re-planned'; }
+      renderTree(); renderPlan();
+      break;
+    }
+
+    case 'recovery.l3_skipped_budget': {
+      var st7 = ensureSubtask(ev.task);
+      if (st7) { st7.status = 'failed'; st7.note = 'skipped: budget exhausted'; }
+      renderTree(); renderPlan();
+      break;
+    }
+
+    case 'verification.stage': {
+      S.stages[ev.stage || 'unknown'] = {
+        passed: ev.passed !== false,
+        blocking: ev.blocking !== false,
+        detail: ev.detail || '',
+        duration: ev.duration_seconds
+      };
+      var ver = ensureAgent('ver-1', 'verifier');
+      if (ver && S.runState === 'RUNNING') { ver.status = 'working'; ver.statusText = 'verifying'; }
+      renderVerify(); renderTree();
+      break;
+    }
+
+    case 'tokens.usage':
+      if (ev.usage && ev.usage.total_tokens != null) S.tokens = num(ev.usage.total_tokens);   // SET not sum
+      if (ev.governor_mode) S.governor = ev.governor_mode;
+      renderTree(); renderAgentTab();
+      break;
+
+    case 'run.end': {
+      S.runEndTs = ev._ts;
+      var okEnd = ev.success !== false;
+      S.runState = okEnd ? 'VERIFIED' : 'NOT VERIFIED';
+      S.verdict = ev.outcome || '';
+      finalizeAgents(okEnd);
+      renderTree(); renderVerify(); renderPlan(); renderAgentTab(); renderMeta();
+      loadDiff();   // auto-fetch the patch when the run ends
+      break;
+    }
+
+    case 'run.failed': {
+      S.runEndTs = ev._ts;
+      S.runState = 'FAILED';
+      S.runError = { error: ev.error || 'unknown error', stage: ev.stage || '' };
+      finalizeAgents(false);
+      renderTree(); renderVerify(); renderMeta();
+      loadDiff();
+      break;
+    }
+
+    default:
+      // Unknown kind: nothing extra — the timeline already rendered a generic
+      // line (kind + run_id + JSON digest). Never dropped, never crashes.
+      break;
+  }
+}
+function updateActivity(ag) {
+  var parts = [];
+  if (ag.stepLabel) parts.push(ag.stepLabel);
+  if (ag.toolLabel) parts.push(ag.toolLabel);
+  if (!parts.length && ag.task) parts.push(ag.task);
+  ag.activity = parts.join(' · ');
+}
+function finalizeAgents(ok) {
+  Object.keys(S.agents).forEach(function (id) {
+    var ag = S.agents[id];
+    if (ag.status === 'thinking' || ag.status === 'working' || ag.status === 'retry' || ag.status === 'blocked') {
+      ag.status = 'idle';
+      ag.statusText = 'run ended';
+    }
+  });
+  var arch = ensureAgent('architect-1', 'architect');
+  if (arch && S.verdict) { arch.status = 'done'; arch.statusText = ok ? 'verified' : 'reviewed'; }
+  var ver = ensureAgent('ver-1', 'verifier');
+  if (ver) { ver.status = ok ? 'done' : 'failed'; ver.statusText = ok ? 'verified' : 'rejected'; }
+}
+
+/* ======================= selection + tabs ======================= */
+function selectAgent(id) {
+  if (!id || !S.agents[id]) return;
+  S.selected = id;
+  S.tab = 'agent';
+  setTab('agent');
+  renderTree();
+  renderAgentTab();
+  updateTabLabels();
+}
+function setTab(name) {
+  S.tab = name;
+  document.querySelectorAll('.tab-btn').forEach(function (b) {
+    var on = b.dataset.tab === name;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('.tab-body').forEach(function (b) {
+    b.classList.toggle('active', b.id === 'tab-' + name);
+  });
+  if (name === 'agent') renderAgentTab();
+  var feed = $('timelineFeed');
+  if (name === 'timeline' && S.timelineFollow) feed.scrollTop = feed.scrollHeight;
+}
+function updateTabLabels() {
+  $('tabBtnAgent').innerHTML = 'Agent' + (S.selected ? ' <span class="sub">' + esc(S.selected) + '</span>' : '');
+}
+
+/* ======================= roster ======================= */
+function fetchAgents() {
+  fetch('/api/agents')
+    .then(function (r) {
+      if (!r.ok) throw new Error('agents endpoint ' + r.status);
+      return r.json();
+    })
+    .then(function (body) {
+      var list = (body && body.agents) || [];
+      list.forEach(function (a) {
+        if (!a || !a.agent_id) return;
+        ensureAgent(a.agent_id, a.role, a.level, null, { skills: a.specialties, toolTier: a.tool_tier });
+      });
+      renderTree();
+    })
+    .catch(function (err) {
+      // tolerated: derive the roster from events instead (L3 agents appear
+      // via specialist.assigned / agent.step; the manager via delegation).
+      console.warn('agent roster unavailable — deriving from events:', err && err.message);
+    });
+}
+
+/* ======================= WebSocket (live) ======================= */
+function connectWS() {
+  if (S.mode === 'replay') return;
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var host = location.host || 'localhost:8080';
+  setWsStatus('connecting', 'connecting…');
+  try {
+    var sock = new WebSocket(proto + '//' + host + '/ws');
+    S.ws = sock;
+    sock.onopen = function () { setWsStatus('connected', 'connected · ' + proto + '//' + host + '/ws'); };
+    sock.onmessage = function (m) {
+      var ev = null;
+      try { ev = JSON.parse(m.data); } catch (e) { /* keep raw */ }
+      if (ev == null) ev = { event: 'raw', message: trunc(String(m.data), 160) };
+      onEvent(ev);
+    };
+    sock.onclose = function () {
+      if (S.ws !== sock) return;
+      setWsStatus('disconnected', 'disconnected · retry in 3s');
+      setTimeout(function () { if (S.mode !== 'replay' && S.ws === sock) connectWS(); }, 3000);
+    };
+    sock.onerror = function () { try { sock.close(); } catch (e) { /* noop */ } };
+  } catch (err) {
+    console.error('WebSocket connection error:', err);
+    setWsStatus('disconnected', 'disconnected · retry in 3s');
+    setTimeout(connectWS, 3000);
+  }
+}
+
+/* ======================= replay mode ======================= */
+function initReplay() {
+  var q = new URLSearchParams(location.search);
+  var path = q.get('replay');
+  if (!path) return false;
+  S.mode = 'replay';
+  setWsStatus('replay', 'replay · ' + path);
+  $('replayControls').hidden = false;
+  updateReplayUI();
+  // Candidate sources: a bare filename resolves against the gateway's
+  // embedded fixture route FIRST (serving it from the page root would 404
+  // and pollute the console); paths and absolute URLs try themselves first,
+  // then the embedded route as fallback (works wherever the page is served).
+  var base = path.split('/').pop();
+  var bare = !/[\\/]/.test(path) && path.indexOf('://') === -1;
+  var candidates = bare
+    ? ['/events/' + base, path]
+    : [path, '/events/' + base];
+  candidates = candidates.filter(function (v, i, a) { return a.indexOf(v) === i; });
+  var attempt = 0;
+  function tryNext() {
+    if (attempt >= candidates.length) {
+      $('replayPos').textContent = 'load failed';
+      appendTimeline({ _ts: Date.now(), event: 'replay.error', message: 'could not load replay file: ' + path });
+      return;
+    }
+    var next = candidates[attempt++];
+    fetch(next)
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status + ' for ' + next);
+        return r.text();
+      })
+      .then(startReplay)
+      .catch(tryNext);
+  }
+  function startReplay(text) {
+      S.replay.data = text.split('\n')
+        .filter(function (l) { return l.trim().length; })
+        .map(function (line, i) {
+          try { return JSON.parse(line); }
+          catch (e) { return { event: 'replay.bad_line', line: i + 1, message: trunc(line, 120) }; }
+        });
+      S.replay.idx = 0;
+      playReplay();
+  }
+  tryNext();
+  return true;
+}
+function playReplay() {
+  if (S.replay.playing) return;
+  S.replay.playing = true;
+  updateReplayUI();
+  S.replay.timer = setInterval(function () {
+    if (S.replay.idx >= S.replay.data.length) { pauseReplay(); return; }
+    onEvent(S.replay.data[S.replay.idx++]);
+    updateReplayUI();
+  }, 300);
+}
+function pauseReplay() {
+  if (!S.replay.playing) return;
+  S.replay.playing = false;
+  clearInterval(S.replay.timer);
+  S.replay.timer = null;
+  updateReplayUI();
+}
+function stepReplayOnce() {
+  pauseReplay();
+  if (S.replay.idx >= S.replay.data.length) return;
+  onEvent(S.replay.data[S.replay.idx++]);
+  updateReplayUI();
+}
+function updateReplayUI() {
+  var btn = $('btnReplayPlay');
+  var total = S.replay.data.length;
+  var done = S.replay.idx >= total && total > 0;
+  btn.textContent = S.replay.playing ? '⏸ pause' : (done ? '↻ replay again' : '▶ play');
+  $('replayPos').textContent = (S.replay.idx + ' / ' + total) + (done && total ? ' · END' : '');
+}
+
+/* ======================= launcher ======================= */
+function setLaunchBusy(busy) {
+  var btn = $('launchBtn');
+  btn.disabled = busy;
+  btn.classList.toggle('loading', busy);
+  btn.querySelector('.btn-label').textContent = busy ? 'pipeline running — watch the stream →' : '▶ run pipeline';
+}
+function showLaunchResult(ok, title, detail, runId) {
+  var box = $('launchResult');
+  box.hidden = false;
+  box.className = 'launch-result ' + (ok ? 'ok' : 'fail');
+  var links = runId ? '<div class="evidence-links">' + ['patch.diff', 'test-report.md', 'summary.md', 'token-report.json'].map(function (name) {
+    return '<a target="_blank" rel="noopener" href="/api/evidence/' + encodeURIComponent(runId) + '/file/' + name + '">' + name + '</a>';
+  }).join('') + '</div>' : '';
+  box.innerHTML = '<div>' + (ok ? '✓ ' : '✗ ') + esc(title) + '</div>' +
+    (detail ? '<div class="lr-detail">' + esc(detail) + '</div>' : '') +
+    (runId ? '<div class="lr-detail mono">run ' + esc(runId) + '</div>' : '') + links;
+}
+function launchTask() {
+  var issue = $('issueInput').value.trim();
+  var repoRoot = $('repoInput').value.trim() || 'fixtures/mini-repo';
+  var demo = $('demoChk').checked;
+  if (!issue) {
+    showLaunchResult(false, 'Missing issue', 'Enter an issue description before launching the pipeline.');
+    return;
+  }
+  var payload = { issue: issue, repo_root: repoRoot };
+  if (demo) payload.demo_mode = true;   // only included when checked
+  setLaunchBusy(true);
+  fetch('/api/tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) { return { ok: r.ok, status: r.status, body: body }; });
+    })
+    .then(function (res) {
+      var body = res.body || {};
+      if (!res.ok) {
+        var detail = body.error || body.detail || ('gateway answered ' + res.status);
+        showLaunchResult(false, 'Launch failed', detail);
+        return;
+      }
+      var result = body.result || {};
+      showLaunchResult(
+        result.success !== false,
+        result.outcome || 'Run finished',
+        (Array.isArray(result.flags) ? result.flags.join(' · ') : ''),
+        body.run_id || result.run_id
+      );
+      if (body.run_id || result.run_id) {
+        S.runId = body.run_id || result.run_id;
+        renderTopbar();
+        loadDiff();
+      }
+    })
+    .catch(function (err) {
+      showLaunchResult(false, 'Launch failed', err.message + ' — is the gateway (and orchestrator) running?');
+    })
+    .then(function () { setLaunchBusy(false); });
+}
+
+/* ======================= wiring ======================= */
+window.addEventListener('DOMContentLoaded', function () {
+  // tabs
+  document.querySelectorAll('.tab-btn').forEach(function (b) {
+    b.addEventListener('click', function () { setTab(b.dataset.tab); });
+  });
+  // tree interactions (delegated — survives re-renders)
+  $('agentTree').addEventListener('click', function (e) {
+    var card = e.target.closest ? e.target.closest('.acard') : null;
+    if (card) selectAgent(card.getAttribute('data-agent'));
+  });
+  $('agentTree').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var card = e.target.closest ? e.target.closest('.acard') : null;
+    if (card) { e.preventDefault(); selectAgent(card.getAttribute('data-agent')); }
+  });
+  // kanban interactions: open subtask card -> jump to its agent
+  $('kanban').addEventListener('click', function (e) {
+    var acc = e.target.closest ? e.target.closest('.st-acc') : null;
+    if (acc) {
+      var tid = acc.getAttribute('data-task');
+      if (tid) S.openAcc[tid] = !acc.open;
+      return;
+    }
+    var card = e.target.closest ? e.target.closest('.stcard') : null;
+    if (!card) return;
+    var st = S.subtasks[card.getAttribute('data-task')];
+    if (st && st.agent) selectAgent(st.agent);
+  });
+  // timeline follow
+  $('timelineFeed').addEventListener('scroll', function () {
+    var feed = $('timelineFeed');
+    var dist = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
+    S.timelineFollow = dist < 48;
+    $('tlFollow').classList.toggle('show', !S.timelineFollow);
+  });
+  $('tlFollow').addEventListener('click', function () {
+    S.timelineFollow = true;
+    $('tlFollow').classList.remove('show');
+    var feed = $('timelineFeed');
+    feed.scrollTop = feed.scrollHeight;
+  });
+  // diff refresh
+  $('btnDiffRefresh').addEventListener('click', loadDiff);
+  // launcher
+  $('launchBtn').addEventListener('click', launchTask);
+  var ta = $('issueInput');
+  ta.addEventListener('input', function () {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(220, ta.scrollHeight) + 'px';
+  });
+  // replay controls
+  $('btnReplayPlay').addEventListener('click', function () {
+    if (S.replay.playing) pauseReplay();
+    else if (S.replay.idx >= S.replay.data.length && S.replay.data.length) {
+      S.replay.idx = 0;  // replay again from the top
+      S.runState = 'IDLE'; S.runStartTs = null; S.runEndTs = null;
+      S.runId = null; S.tokens = 0; S.verdict = null;
+      resetRun(); renderTree(); renderPlan(); renderVerify(); renderTopbar(); renderMeta();
+      playReplay();
+    }
+    else playReplay();
+  });
+  $('btnReplayStep').addEventListener('click', stepReplayOnce);
+  // timer
+  setInterval(tickTimer, 250);
+
+  renderTopbar(); renderTree(); renderPlan(); renderVerify(); renderSecurity();
+  var isReplay = initReplay();
+  fetchAgents();          // always attempted; absence tolerated
+  if (!isReplay) connectWS();
+  updateTabLabels();
+});
+</script>
 </body>
 </html>

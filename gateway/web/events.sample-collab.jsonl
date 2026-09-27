@@ -1,0 +1,41 @@
+{"event": "run.start", "run_id": "f7e6d5c4b3a2", "flags": ["prompt-injection pattern: ignore previous instructions"], "issue": "Refactor the validator module into smaller units. The 900-line validator.py should be split by concern with no behavior change."}
+{"event": "architect.profile", "run_id": "f7e6d5c4b3a2", "profile": {"languages": {"Python": 14}, "test_framework": "pytest", "files": 14, "loc": 3120}}
+{"event": "agent.step", "run_id": "f7e6d5c4b3a2", "agent": "architect-1", "role": "architect", "task": "planning", "step": 1, "max_steps": 60, "phase": "thinking"}
+{"event": "agent.usage", "run_id": "f7e6d5c4b3a2", "agent": "architect-1", "task": "planning", "prompt_tokens": 8800, "completion_tokens": 950, "total_tokens": 9750, "total_tokens_agent": 9750}
+{"event": "agent.step", "run_id": "f7e6d5c4b3a2", "agent": "architect-1", "role": "architect", "task": "planning", "step": 1, "max_steps": 60, "phase": "responding"}
+{"event": "architect.plan", "run_id": "f7e6d5c4b3a2", "reproduction_test": "", "subtasks": [{"id": "st-1", "title": "Split validation entry points", "specialty": "core-logic", "complexity": 8, "files": ["src/validator.py"], "depends_on": [], "acceptance": "public API unchanged", "risk_notes": "imports churn"}, {"id": "st-2", "title": "Keep tests green through the split", "specialty": "testing", "complexity": 5, "files": ["tests/test_validator.py"], "depends_on": ["st-1"], "acceptance": "suite green", "risk_notes": ""}]}
+{"event": "baseline.captured", "run_id": "f7e6d5c4b3a2", "runnable": true, "pre_existing_failures": 0, "reproduction_test": ""}
+{"event": "specialist.assigned", "run_id": "f7e6d5c4b3a2", "task": "st-1", "agent": "impl-1", "role": "implementer", "batch": 1, "routing": {"specialty": 0.4, "availability": 0.2, "load": 0.2, "capability": 0.2, "total": 0.8}}
+{"event": "agent.step", "run_id": "f7e6d5c4b3a2", "agent": "impl-1", "role": "implementer", "task": "st-1", "step": 1, "max_steps": 16, "phase": "thinking"}
+{"event": "agent.usage", "run_id": "f7e6d5c4b3a2", "agent": "impl-1", "task": "st-1", "prompt_tokens": 9200, "completion_tokens": 500, "total_tokens": 9700, "total_tokens_agent": 9700}
+{"event": "agent.step", "run_id": "f7e6d5c4b3a2", "agent": "impl-1", "role": "implementer", "task": "st-1", "step": 1, "max_steps": 16, "phase": "responding"}
+{"event": "agent.tool", "run_id": "f7e6d5c4b3a2", "agent": "impl-1", "role": "implementer", "task": "st-1", "step": 1, "tool": "read_file", "args_digest": "src/validator.py", "ok": true, "duration_ms": 15, "result_digest": "912 lines"}
+{"event": "agent.step", "run_id": "f7e6d5c4b3a2", "agent": "impl-1", "role": "implementer", "task": "st-1", "step": 2, "max_steps": 16, "phase": "thinking"}
+{"event": "agent.usage", "run_id": "f7e6d5c4b3a2", "agent": "impl-1", "task": "st-1", "prompt_tokens": 15000, "completion_tokens": 1400, "total_tokens": 16400, "total_tokens_agent": 26100}
+{"event": "agent.step", "run_id": "f7e6d5c4b3a2", "agent": "impl-1", "role": "implementer", "task": "st-1", "step": 2, "max_steps": 16, "phase": "responding"}
+{"event": "agent.tool", "run_id": "f7e6d5c4b3a2", "agent": "impl-1", "role": "implementer", "task": "st-1", "step": 2, "tool": "apply_edit", "args_digest": "src/validator.py (+120/-380)", "ok": false, "duration_ms": 30, "result_digest": "context mismatch at line 440"}
+{"event": "recovery.l1_retry", "run_id": "f7e6d5c4b3a2", "task": "st-1", "agent": "impl-1", "attempt": 1, "error_type": "ValueError"}
+{"event": "recovery.l1_retry", "run_id": "f7e6d5c4b3a2", "task": "st-1", "agent": "impl-1", "attempt": 2, "error_type": "ValueError"}
+{"event": "agent.step", "run_id": "f7e6d5c4b3a2", "agent": "mgr-1", "role": "manager", "task": "coordination", "step": 1, "max_steps": 16, "phase": "thinking"}
+{"event": "agent.usage", "run_id": "f7e6d5c4b3a2", "agent": "mgr-1", "task": "coordination", "prompt_tokens": 5200, "completion_tokens": 180, "total_tokens": 5380, "total_tokens_agent": 5380}
+{"event": "recovery.l2_guidance", "run_id": "f7e6d5c4b3a2", "task": "st-1", "agent": "impl-1", "guidance": "add collaborators"}
+{"event": "specialist.collaborator_added", "run_id": "f7e6d5c4b3a2", "agent": "impl-1-collab-1", "for": "impl-1", "role": "implementer"}
+{"event": "recovery.l2_reroute", "run_id": "f7e6d5c4b3a2", "task": "st-1", "agent": "impl-1", "to": "impl-1-collab-1", "guidance": "add collaborators"}
+{"event": "agent.step", "run_id": "f7e6d5c4b3a2", "agent": "impl-1-collab-1", "role": "implementer", "task": "st-1", "step": 1, "max_steps": 16, "phase": "thinking"}
+{"event": "agent.usage", "run_id": "f7e6d5c4b3a2", "agent": "impl-1-collab-1", "task": "st-1", "prompt_tokens": 12800, "completion_tokens": 900, "total_tokens": 13700, "total_tokens_agent": 13700}
+{"event": "agent.step", "run_id": "f7e6d5c4b3a2", "agent": "impl-1-collab-1", "role": "implementer", "task": "st-1", "step": 1, "max_steps": 16, "phase": "responding"}
+{"event": "agent.tool", "run_id": "f7e6d5c4b3a2", "agent": "impl-1-collab-1", "role": "implementer", "task": "st-1", "step": 1, "tool": "apply_edit", "args_digest": "src/validator.py (+120/-380)", "ok": true, "duration_ms": 28, "result_digest": "patch applied"}
+{"event": "agent.tool", "run_id": "f7e6d5c4b3a2", "agent": "impl-1-collab-1", "role": "implementer", "task": "st-1", "step": 1, "tool": "run_tests", "args_digest": "pytest -q", "ok": true, "duration_ms": 8400, "result_digest": "97 passed, 1 skipped"}
+{"event": "specialist.result", "run_id": "f7e6d5c4b3a2", "task": "st-1", "agent": "impl-1-collab-1", "role": "implementer", "success": true, "summary": "validator split into 4 modules; suite green", "steps": 1, "tokens": 13700}
+{"event": "specialist.assigned", "run_id": "f7e6d5c4b3a2", "task": "st-2", "agent": "ver-1", "role": "verifier", "batch": 2, "routing": {"specialty": 0.4, "availability": 0.2, "load": 0.2, "capability": 0.2, "total": 0.8}}
+{"event": "agent.tool", "run_id": "f7e6d5c4b3a2", "agent": "ver-1", "role": "verifier", "task": "st-2", "step": 1, "tool": "run_tests", "args_digest": "pytest -q", "ok": true, "duration_ms": 8600, "result_digest": "97 passed, 1 skipped"}
+{"event": "specialist.result", "run_id": "f7e6d5c4b3a2", "task": "st-2", "agent": "ver-1", "role": "verifier", "success": true, "summary": "suite green post-split", "steps": 1, "tokens": 14100}
+{"event": "tokens.usage", "run_id": "f7e6d5c4b3a2", "phase": "specialists", "governor_mode": "NORMAL", "usage": {"prompt_tokens": 71000, "completion_tokens": 6100, "total_tokens": 77100}}
+{"event": "verification.stage", "run_id": "f7e6d5c4b3a2", "stage": "1-integrity", "passed": true, "blocking": true, "detail": "diff clean", "duration_seconds": 0.3}
+{"event": "verification.stage", "run_id": "f7e6d5c4b3a2", "stage": "2-self-check", "passed": true, "blocking": true, "detail": "all task summaries report success", "duration_seconds": 0.2}
+{"event": "verification.stage", "run_id": "f7e6d5c4b3a2", "stage": "3-local-tests", "passed": false, "blocking": true, "detail": "2 regressions vs baseline: test_validator.py::test_lazy, test_validator.py::test_range", "duration_seconds": 19.4}
+{"event": "verification.stage", "run_id": "f7e6d5c4b3a2", "stage": "4-code-review", "passed": true, "blocking": false, "detail": "skipped after blocking failure", "duration_seconds": 0.0}
+{"event": "verification.stage", "run_id": "f7e6d5c4b3a2", "stage": "5-security", "passed": true, "blocking": true, "detail": "skipped after blocking failure", "duration_seconds": 0.0}
+{"event": "verification.stage", "run_id": "f7e6d5c4b3a2", "stage": "6-final-review", "passed": true, "blocking": true, "detail": "skipped after blocking failure", "duration_seconds": 0.0}
+{"event": "tokens.usage", "run_id": "f7e6d5c4b3a2", "phase": "verification", "governor_mode": "NORMAL", "usage": {"prompt_tokens": 78200, "completion_tokens": 6400, "total_tokens": 84600}}
+{"event": "run.end", "run_id": "f7e6d5c4b3a2", "success": false, "outcome": "NOT VERIFIED: see test-report.md and task failures"}

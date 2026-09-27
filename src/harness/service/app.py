@@ -9,6 +9,7 @@ is an optional `harness[platform]` add-on.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from harness import __version__
+from harness.agents.prompts import ROLE_PRESETS
 from harness.config import HarnessConfig
 from harness.engine.evidence import EvidencePack
 from harness.engine.pipeline import HarnessPipeline
@@ -72,6 +74,32 @@ def _safe_run_id(run_id: str) -> bool:
 
 RUN_ROOT_REGISTRY_MAX = 256
 """Cap on remembered run->repo mappings (evicts oldest first)."""
+
+RUN_ROOTS_FILE = Path(".harness") / "run-roots.json"
+"""Where the run->repo registry persists: evidence links must survive an
+orchestrator restart (the cockpit's Diff tab fetches patch.diff long after
+the run finished). Best-effort by design - the graded eval path never
+reads it."""
+
+
+def _load_run_roots() -> dict[str, str]:
+    """Read the persisted registry; any damage yields an empty registry."""
+    try:
+        data = json.loads(RUN_ROOTS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(key): str(value) for key, value in data.items()}
+
+
+def _save_run_roots(registry: dict[str, str]) -> None:
+    """Persist the registry; persistence is a convenience, never a gate."""
+    try:
+        RUN_ROOTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RUN_ROOTS_FILE.write_text(json.dumps(registry, sort_keys=True, indent=0), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _remember_run_root(
@@ -132,12 +160,20 @@ def create_app(
         return resolved_config
 
     pipelines: dict[str, HarnessPipeline] = {}
-    run_roots: dict[str, str] = {}
+    run_roots: dict[str, str] = _load_run_roots()
 
-    def _pipeline(repo_root: str, event_sink: Any = None) -> HarnessPipeline:
-        """One shared pipeline per repo root: agent/manager state must
-        persist across requests (assign -> status -> execute)."""
-        if repo_root not in pipelines:
+    def _pipeline(
+        repo_root: str, event_sink: Any = None, demo: bool | None = None
+    ) -> HarnessPipeline:
+        """One shared pipeline per (repo root, mode): agent/manager state must
+        persist across requests (assign -> status -> execute).
+
+        `demo` forces the scripted provider for THIS cache entry - the
+        per-request checkbox must not silently hit the real model because a
+        real provider was cached first (integration finding).
+        """
+        key = f"{repo_root}:demo" if demo else repo_root
+        if key not in pipelines:
             cfg = _config()
             store = create_context_store(cfg.storage)
             key_env = cfg.models["default"].api_key_env
@@ -148,24 +184,26 @@ def create_app(
                 or os.environ.get("CODEX_API_KEY")
                 or os.environ.get("ANTHROPIC_API_KEY")
             )
-            demo = (os.environ.get("HARNESS_DEMO") == "1") or (
-                not has_key and cfg.models["default"].provider != "fake"
+            effective_demo = (
+                demo
+                or (os.environ.get("HARNESS_DEMO") == "1")
+                or (not has_key and cfg.models["default"].provider != "fake")
             )
             resolved: Any
-            if demo and provider is None:
+            if effective_demo and provider is None:
                 from harness.infrastructure.model_providers.fake import build_demo_provider
 
                 resolved = build_demo_provider(cfg.models["default"])
             else:
                 resolved = provider or create_model_provider(cfg.models["default"])
-            pipelines[repo_root] = HarnessPipeline(
+            pipelines[key] = HarnessPipeline(
                 repo_root=Path(repo_root),
                 config=cfg,
                 provider=resolved,
                 store=store,
                 event_sink=event_sink,
             )
-        return pipelines[repo_root]
+        return pipelines[key]
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -173,14 +211,29 @@ def create_app(
 
     @app.get("/api/agents")
     async def agents() -> dict[str, Any]:
-        """The configured agent roster (gateway proxies this to the cockpit)."""
+        """The configured agent roster (gateway proxies this to the cockpit).
+
+        v2 contract (docs/cockpit-events.md): specialties, tool tier, and the
+        hierarchy level so the cockpits can render the org tree without a
+        run in flight.
+        """
         cfg = _config()
+        levels = {"architect": 1, "manager": 2}
         return {
             "agents": [
                 {
                     "agent_id": agent.agent_id,
                     "role": agent.role,
                     "model": agent.model,
+                    "specialties": sorted(
+                        ROLE_PRESETS[agent.role].specialties
+                        if agent.role in ROLE_PRESETS
+                        else {agent.role}
+                    ),
+                    "tool_tier": ROLE_PRESETS[agent.role].max_tool_tier.value
+                    if agent.role in ROLE_PRESETS
+                    else 3,
+                    "level": levels.get(agent.role, 3),
                 }
                 for agent in cfg.agents
                 if agent.enabled
@@ -252,7 +305,10 @@ def create_app(
         if not _safe_run_id(run_id):
             return {"success": False, "error": "invalid run_id", "outcome": "FAILED"}
         _remember_run_root(run_roots, run_id, request.repo_root)
-        pipeline = _pipeline(request.repo_root, event_sink=publisher.sink_for(run_id))
+        _save_run_roots(run_roots)
+        pipeline = _pipeline(
+            request.repo_root, event_sink=publisher.sink_for(run_id), demo=request.demo_mode or None
+        )
         key_env = _config().models["default"].api_key_env
         has_key = bool(
             os.environ.get(key_env)

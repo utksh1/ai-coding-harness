@@ -138,3 +138,21 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Pa
     for alt in ("AI_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(alt, raising=False)
     yield tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _isolated_run_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """Keep the orchestrator's persisted run->repo registry OUT of the repo.
+
+    `harness.service.app` writes `.harness/run-roots.json` relative to the
+    process cwd; without this, every service test that hits /agent/run
+    pollutes the repository tree (and the next real process then loads
+    pytest tmp-dir entries as "known runs").
+    """
+    try:
+        from harness.service import app as service_app
+    except ImportError:  # pragma: no cover - platform extra not installed
+        yield tmp_path
+        return
+    monkeypatch.setattr(service_app, "RUN_ROOTS_FILE", tmp_path / "run-roots.json")
+    yield tmp_path

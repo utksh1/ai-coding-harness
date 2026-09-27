@@ -186,6 +186,27 @@ def test_demo_provider_is_labeled(fake_model_config) -> None:
     assert len(provider._responses) == 4  # profile, plan, specialist, verdict
 
 
+async def test_demo_provider_tails_the_verdict_on_extra_calls(fake_model_config) -> None:
+    """A dirty-tree demo run exceeds the scripted call count (the final
+    review makes one call per diff chunk). Extra calls must keep receiving
+    the VERDICT, never wrap to the profile (live finding: ReviewVerdict
+    crashed on {'languages': ...})."""
+    import json
+
+    from harness.infrastructure.model_providers.fake import build_demo_provider
+
+    provider = build_demo_provider(fake_model_config)
+    # consume the whole script: profile, plan, specialist, verdict
+    for _ in range(4):
+        await provider.generate([{"role": "user", "content": "go"}])
+    # extra chunks: verdict, verdict, verdict...
+    for _ in range(3):
+        extra = await provider.generate([{"role": "user", "content": "chunk"}])
+        parsed = json.loads(extra.content)
+        assert parsed["approved"] is True
+        assert "languages" not in parsed
+
+
 def test_solve_bad_issue_file_is_error(demo_repo: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(demo_repo)
     monkeypatch.setattr("sys.stdin", AlwaysTTY())

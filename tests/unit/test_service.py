@@ -229,6 +229,50 @@ def test_evidence_resolves_repo_from_run_registry(demo_repo: Path, fake_model_co
     assert unknown.json()["found"] is False
 
 
+def test_run_root_registry_persists_across_restart(tmp_path: Path, monkeypatch) -> None:
+    """Evidence links survive an orchestrator restart (the cockpit's Diff
+    tab fetches patch.diff long after the run finished)."""
+    from harness.service import app as service_app
+
+    target = tmp_path / "roots" / "run-roots.json"
+    monkeypatch.setattr(service_app, "RUN_ROOTS_FILE", target)
+
+    service_app._save_run_roots({"run-a": "/repo/a", "run-b": "/repo/b"})
+    assert target.exists()
+    assert service_app._load_run_roots() == {"run-a": "/repo/a", "run-b": "/repo/b"}
+
+    # a fresh process (new app instance) reads the same registry
+    registry = service_app._load_run_roots()
+    service_app._remember_run_root(registry, "run-c", "/repo/c")
+    service_app._save_run_roots(registry)
+    assert service_app._load_run_roots()["run-c"] == "/repo/c"
+
+
+def test_run_roots_load_tolerates_damage(tmp_path: Path, monkeypatch) -> None:
+    from harness.service import app as service_app
+
+    target = tmp_path / "run-roots.json"
+    monkeypatch.setattr(service_app, "RUN_ROOTS_FILE", target)
+    # not JSON
+    target.write_text("]]not json[[")
+    assert service_app._load_run_roots() == {}
+    # JSON but not an object
+    target.write_text('["a", "b"]')
+    assert service_app._load_run_roots() == {}
+    # absent file
+    target.unlink()
+    assert service_app._load_run_roots() == {}
+
+
+def test_run_roots_save_never_raises_on_unwritable(tmp_path: Path, monkeypatch) -> None:
+    from harness.service import app as service_app
+
+    blocked = tmp_path / "blocked"
+    blocked.write_text("a file where the directory should be")
+    monkeypatch.setattr(service_app, "RUN_ROOTS_FILE", blocked / "run-roots.json")
+    service_app._save_run_roots({"run-a": "/repo/a"})  # must not raise
+
+
 def test_run_root_registry_evicts_oldest() -> None:
     from harness.service.app import _remember_run_root
 

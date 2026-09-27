@@ -95,18 +95,47 @@ def capability(required_tools: set[str], available_tools: set[str], model_tier: 
     return coverage * min(1.0, model_tier / 4)
 
 
+def _specialty_hit(task: Task, slot: SpecialistSlot) -> float:
+    """The 40% factor's raw hit: preset specialty, else role fallback."""
+    hit = specialty_match(task.specialty, slot.specialties, slot.performance)
+    if hit:
+        return hit
+    return 1.0 if role_matches_specialty(slot.role, task.specialty) else 0.0
+
+
 def assignment_score(task: Task, slot: SpecialistSlot, team_average_tokens: int) -> float:
     """Weighted multi-factor score from DESIGN_SPEC §5.1."""
-    specialty_hit = specialty_match(
-        task.specialty, slot.specialties, slot.performance
-    ) or role_matches_specialty(slot.role, task.specialty)
     return (
-        specialty_hit * WEIGHTS["specialty"]
+        _specialty_hit(task, slot) * WEIGHTS["specialty"]
         + availability(slot.current_tasks, slot.max_concurrent) * WEIGHTS["availability"]
         + load_balance(slot.tokens_used, team_average_tokens) * WEIGHTS["load"]
         + capability(set(task.required_tools), slot.available_tools, slot.model_tier)
         * WEIGHTS["capability"]
     )
+
+
+def routing_breakdown(
+    task: Task, slot: SpecialistSlot, team_average_tokens: int = 0
+) -> dict[str, float]:
+    """Per-factor contributions of one routing decision (cockpit events).
+
+    Keys are the DESIGN_SPEC §5.1 factors; values are the *weighted*
+    contributions, so their sum equals the slot's assignment score. The
+    Manager's delegation moment - "why did the work go here" - made legible
+    for the cockpit's routing bars (docs/cockpit-events.md §3).
+    """
+    return {
+        "specialty": round(_specialty_hit(task, slot) * WEIGHTS["specialty"], 4),
+        "availability": round(
+            availability(slot.current_tasks, slot.max_concurrent) * WEIGHTS["availability"], 4
+        ),
+        "load": round(load_balance(slot.tokens_used, team_average_tokens) * WEIGHTS["load"], 4),
+        "capability": round(
+            capability(set(task.required_tools), slot.available_tools, slot.model_tier)
+            * WEIGHTS["capability"],
+            4,
+        ),
+    }
 
 
 def rank_specialists(

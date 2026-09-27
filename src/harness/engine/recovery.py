@@ -59,6 +59,8 @@ class RecoveryLadder:
         reroute: Rerouter | None = None,
         on_event: Tracer | None = None,
         governor: Any | None = None,
+        run_id: str | None = None,
+        agent_id: str | None = None,
     ) -> None:
         self._manager = manager
         self._architect = architect
@@ -67,10 +69,23 @@ class RecoveryLadder:
         self._reroute = reroute
         self._on_event = on_event
         self._governor = governor
+        self._run_id = run_id
+        self._agent_id = agent_id
+        #: The agent object behind the LAST executor invoked (bound methods
+        #: carry their owner): the pipeline reads it to attribute the final
+        #: ``specialist.result`` to the agent that actually finished the work
+        #: (a collaborator may have taken over at L2).
+        self.last_executor_agent: Any | None = None
 
     def _trace(self, event: dict[str, Any]) -> None:
         if self._on_event is not None:
-            self._on_event(event)
+            payload = {**event, "run_id": self._run_id}
+            # L1/L2 belong to the working specialist; L3 is the Architect's.
+            if self._agent_id and str(payload.get("event", "")).startswith(
+                ("recovery.l1", "recovery.l2")
+            ):
+                payload.setdefault("agent", self._agent_id)
+            self._on_event(payload)
 
     async def run(self, task: Task, executor: Executor, classify: Classifier) -> TaskResult:
         """Execute `task`, escalating through L1-L3 before giving up gracefully."""
@@ -180,6 +195,7 @@ class RecoveryLadder:
         )
 
     async def _attempt(self, task: Task, executor: Executor) -> TaskResult:
+        self.last_executor_agent = getattr(executor, "__self__", None)
         try:
             return await executor(task)
         except BudgetExhausted:

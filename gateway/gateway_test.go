@@ -2,6 +2,7 @@ package main
 
 import (
         "encoding/json"
+        "io"
         "net/http"
         "net/http/httptest"
         "strings"
@@ -89,6 +90,42 @@ func TestCreateTaskRejectsEmptyIssue(t *testing.T) {
         defer response.Body.Close()
         if response.StatusCode != http.StatusBadRequest {
                 t.Fatalf("expected 400 for empty issue, got %d", response.StatusCode)
+        }
+}
+
+func TestCreateTaskForwardsDemoMode(t *testing.T) {
+        // The cockpit's demo checkbox only works if the gateway forwards the
+        // flag instead of silently dropping it (integration finding: demo runs
+        // were hitting the real model because demo_mode never crossed the proxy).
+        var received map[string]any
+        upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                _ = json.NewDecoder(r.Body).Decode(&received)
+                w.Header().Set("Content-Type", "application/json")
+                _ = json.NewEncoder(w).Encode(map[string]any{"success": true, "outcome": "DEMO"})
+        }))
+        defer upstream.Close()
+
+        gateway := NewGateway(Config{OrchestratorURL: upstream.URL}, nil)
+        server := httptest.NewServer(gateway.Handler())
+        defer server.Close()
+
+        response, err := http.Post(server.URL+"/api/tasks", "application/json",
+                strings.NewReader(`{"issue": "demo run", "repo_root": "/tmp/r", "demo_mode": true}`))
+        if err != nil {
+                t.Fatalf("request failed: %v", err)
+        }
+        defer response.Body.Close()
+        if response.StatusCode != http.StatusCreated {
+                t.Fatalf("expected 201, got %d", response.StatusCode)
+        }
+        if received == nil {
+                t.Fatal("orchestrator never received the request")
+        }
+        if received["demo_mode"] != true {
+                t.Fatalf("demo_mode must be forwarded, got %v", received["demo_mode"])
+        }
+        if received["run_id"] == "" || received["run_id"] == nil {
+                t.Fatalf("run_id must be stamped, got %v", received["run_id"])
         }
 }
 
@@ -302,5 +339,36 @@ func TestStoreEventCapsHistory(t *testing.T) {
         gateway.taskEventsMu.Unlock()
         if count != maxStoredEvents {
                 t.Fatalf("history must cap at %d events, got %d", maxStoredEvents, count)
+        }
+}
+
+func TestEventFixtureRoute(t *testing.T) {
+        gateway := NewGateway(LoadConfig(), nil)
+        server := httptest.NewServer(gateway.Handler())
+        defer server.Close()
+
+        response, err := http.Get(server.URL + "/events/events.sample.jsonl")
+        if err != nil {
+                t.Fatalf("fixture fetch failed: %v", err)
+        }
+        defer response.Body.Close()
+        if response.StatusCode != http.StatusOK {
+                t.Fatalf("expected 200 for embedded fixture, got %d", response.StatusCode)
+        }
+        body, _ := io.ReadAll(response.Body)
+        if !strings.Contains(string(body), "run.start") {
+                t.Fatal("fixture content missing run.start line")
+        }
+
+        // non-jsonl and traversal-ish names are rejected
+        for _, bad := range []string{"/events/index.html", "/events/../../main.go", "/events/nope.jsonl"} {
+                resp, err := http.Get(server.URL + bad)
+                if err != nil {
+                        t.Fatalf("request %s failed: %v", bad, err)
+                }
+                resp.Body.Close()
+                if resp.StatusCode != http.StatusNotFound {
+                        t.Fatalf("expected 404 for %s, got %d", bad, resp.StatusCode)
+                }
         }
 }

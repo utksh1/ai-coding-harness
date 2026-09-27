@@ -147,4 +147,26 @@ def build_demo_provider(config: Any) -> FakeProvider:
             )
         ),
     ]
-    return FakeProvider(config, responses=responses, loop=True)
+    return _DemoProvider(config, responses)
+
+
+class _DemoProvider(FakeProvider):
+    """Demo replay that tails the script instead of wrapping it.
+
+    The final review makes one structured call per diff chunk; a demo repo
+    with a dirty tree (e.g. leftover ``.harness/`` artifacts) can exceed the
+    scripted call count. Wrapping to the FIRST response would feed a verdict
+    parser the repository PROFILE (live finding: ReviewVerdict crashed on
+    ``{'languages': ...}``). Tailing the LAST scripted response - the
+    verdict - keeps every extra call semantically valid.
+    """
+
+    async def generate(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        **overrides: Any,
+    ) -> ModelResponse:
+        if not self._responses and self._initial_responses:
+            self._responses = [self._initial_responses[-1].model_copy()]
+        return await super().generate(messages, tools, **overrides)

@@ -18,6 +18,7 @@ import (
         "net/http/httputil"
         "net/url"
         "os"
+        "strings"
         "sync"
         "time"
 
@@ -108,8 +109,11 @@ func NewGateway(config Config, proxy http.Handler) *Gateway {
 
 // maxStoredEvents caps one run's in-memory event history: the cockpit's
 // feed is a live stream, the history is a convenience, and an unbounded map
-// is a leak on a long-lived daemon.
-const maxStoredEvents = 500
+// is a leak on a long-lived daemon. v2 cockpit events (agent.step/tool/usage
+// per model call) push real runs into the hundreds—low thousands, so the
+// cap sits above the largest observed real-run stream (~2k events at 4M
+// tokens) while still bounding memory.
+const maxStoredEvents = 2000
 
 // Handler builds the full route table.
 func (g *Gateway) Handler() http.Handler {
@@ -124,7 +128,30 @@ func (g *Gateway) Handler() http.Handler {
         mux.HandleFunc("GET /api/evidence/{rest...}", g.proxyToOrchestrator)
         mux.HandleFunc("GET /api/metrics", g.handleMetrics)
         mux.HandleFunc("GET /ws", g.handleWS)
+        // Replay fixtures for both cockpits' offline demo mode
+        // (?replay=events.sample.jsonl). Served from the same embedded FS
+        // as the dashboard so a static dev server is never required.
+        mux.HandleFunc("GET /events/{name}", g.handleEventFixture)
         return mux
+}
+
+// handleEventFixture serves one replay fixture (.jsonl) from the embedded
+// web/ directory. Only .jsonl basenames: no directories, no traversal, and
+// the dashboard itself (index.html) is not reachable through this route.
+func (g *Gateway) handleEventFixture(w http.ResponseWriter, request *http.Request) {
+        name := request.PathValue("name")
+        if name == "" || !strings.HasSuffix(name, ".jsonl") || strings.ContainsAny(name, `/\`) {
+                http.NotFound(w, request)
+                return
+        }
+        content, err := webFS.ReadFile("web/" + name)
+        if err != nil {
+                http.NotFound(w, request)
+                return
+        }
+        w.Header().Set("Content-Type", "application/x-ndjson")
+        w.WriteHeader(http.StatusOK)
+        _, _ = w.Write(content)
 }
 
 func (g *Gateway) handleDashboard(w http.ResponseWriter, _ *http.Request) {
@@ -186,6 +213,10 @@ func (g *Gateway) handleCreateTask(w http.ResponseWriter, request *http.Request)
         var body struct {
                 Issue    string `json:"issue"`
                 RepoRoot string `json:"repo_root"`
+                // demo_mode opts the run into scripted model responses: the
+                // cockpit's offline demo path (docs/eval-runbook §3). Forwarded
+                // verbatim to the orchestrator's /agent/run contract.
+                DemoMode bool `json:"demo_mode"`
         }
         if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Issue == "" {
                 writeJSON(w, http.StatusBadRequest, map[string]any{
@@ -197,6 +228,9 @@ func (g *Gateway) handleCreateTask(w http.ResponseWriter, request *http.Request)
         payload := map[string]any{"issue": body.Issue, "run_id": runID}
         if body.RepoRoot != "" {
                 payload["repo_root"] = body.RepoRoot
+        }
+        if body.DemoMode {
+                payload["demo_mode"] = true
         }
         proxied := proxyRequest(w, request, g.config.OrchestratorURL+"/agent/run", payload)
         if proxied == nil {

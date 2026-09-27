@@ -15,7 +15,10 @@ context store:
 
 from __future__ import annotations
 
+import contextlib
 import json
+import time
+from collections.abc import Callable
 from typing import Any
 
 from harness.agents.base import BaseAgent, ContextWindow
@@ -238,6 +241,13 @@ class StoreWindow:
         return messages
 
 
+Tracer = Callable[[dict[str, Any]], None]
+"""Cockpit event sink: one JSON-serializable event dict per call.
+
+Attached per run by the pipeline (``attach_tracer``); emission failures are
+swallowed so a cockpit can never break an eval run."""
+
+
 class LLMAgent(BaseAgent):
     """Agent loop over a model provider with tools, budgeting, and context."""
 
@@ -275,7 +285,88 @@ class LLMAgent(BaseAgent):
         self._attempts: dict[str, int] = {}
         self._capabilities: ModelCapabilities | None = None
         self.capability_cache: CapabilityCache = _CAPABILITY_CACHE
+        # Cockpit tracing (contract: docs/cockpit-events.md). None until the
+        # pipeline attaches one per run; counters reset with it.
+        self.tracer: Tracer | None = None
+        self.run_id: str | None = None
+        self.traced_tokens: int = 0
+        self._structured_steps: int = 0
+        self._last_steps: int = 0
         self._reset_dedup_state()
+
+    def attach_tracer(self, tracer: Tracer | None, run_id: str | None) -> None:
+        """Attach the cockpit event tracer for one run (or detach with None)."""
+        self.tracer = tracer
+        self.run_id = run_id
+        self.traced_tokens = 0
+        self._structured_steps = 0
+        self._last_steps = 0
+
+    @property
+    def steps_used(self) -> int:
+        """Steps consumed by the most recent ``execute_task`` (cockpit reads)."""
+        return self._last_steps
+
+    def _emit(self, event: dict[str, Any]) -> None:
+        """Emit one cockpit event; tracing must never break a run."""
+        if self.tracer is None:
+            return
+        payload = {
+            **event,
+            "run_id": self.run_id,
+            "agent": self.agent_id,
+            "role": self.role,
+        }
+        # Cockpit isolation by contract: a broken event sink must never
+        # break the eval run (mirrors EvidencePack's event_sink guard).
+        with contextlib.suppress(Exception):
+            self.tracer(payload)
+
+    def _emit_step(self, phase: str, step: int, task: str | None) -> None:
+        self._emit(
+            {
+                "event": "agent.step",
+                "task": task or "ad-hoc",
+                "step": step,
+                "max_steps": self.max_steps,
+                "phase": phase,
+            }
+        )
+
+    def _emit_usage(self, response: ModelResponse, task: str | None) -> None:
+        self.traced_tokens += response.prompt_tokens + response.completion_tokens
+        self._emit(
+            {
+                "event": "agent.usage",
+                "task": task or "ad-hoc",
+                "prompt_tokens": response.prompt_tokens,
+                "completion_tokens": response.completion_tokens,
+                "total_tokens": response.prompt_tokens + response.completion_tokens,
+                "total_tokens_agent": self.traced_tokens,
+            }
+        )
+
+    def _emit_tool(
+        self, name: str, arguments: dict[str, Any], result: ToolResult, duration_ms: float
+    ) -> None:
+        self._emit(
+            {
+                "event": "agent.tool",
+                "task": self._active_task
+                or getattr(self.context_window, "task_id", None)
+                or "ad-hoc",
+                "step": self._last_steps or self._structured_steps,
+                "tool": name,
+                "args_digest": _args_digest(name, arguments),
+                "ok": result.success,
+                "duration_ms": round(duration_ms),
+                "result_digest": _result_digest(result),
+            }
+        )
+
+    def _trace_task(self) -> str | None:
+        """Best-effort task label for an in-flight model call."""
+        return self._active_task or getattr(self.context_window, "task_id", None)
 
     def _reset_dedup_state(self) -> None:
         """Fresh per-task dedup cache (#62): files may change between tasks."""
@@ -350,7 +441,11 @@ class LLMAgent(BaseAgent):
         the required JSON (live-run finding, M4).
         """
         self.context_window.append("user", user_prompt)
+        task = self._trace_task()
+        self._structured_steps += 1
+        self._emit_step("thinking", self._structured_steps, task)
         reply = await self._generate(instruction, use_tools=False)
+        self._emit_step("responding", self._structured_steps, task)
         try:
             parsed = extract_json(reply.content)
         except StructuredOutputError:
@@ -359,7 +454,10 @@ class LLMAgent(BaseAgent):
                 f"Schema: {schema_hint}\nReply with ONLY the JSON object."
             )
             self.context_window.append("user", repair)
+            self._structured_steps += 1
+            self._emit_step("thinking", self._structured_steps, task)
             reply = await self._generate(instruction, use_tools=False)
+            self._emit_step("responding", self._structured_steps, task)
             parsed = extract_json(reply.content)
             self.context_window.append("assistant", "recovered with valid JSON")
         self._compress_window_after_structured()
@@ -397,6 +495,7 @@ class LLMAgent(BaseAgent):
         self.governor.record(
             self.agent_id, self.provider.model, response.prompt_tokens, response.completion_tokens
         )
+        self._emit_usage(response, self._trace_task())
         self.context_window.append("assistant", response.content or "")
         return response
 
@@ -426,6 +525,8 @@ class LLMAgent(BaseAgent):
         for _step in range(self.max_steps):
             self.governor.check()
             self.governor.reserve(_estimate_tokens(self._messages(task, ledger, use_native)))
+            self._last_steps = _step + 1
+            self._emit_step("thinking", _step + 1, task.id)
             response = await self.provider.generate(
                 self._messages(task, ledger, use_native),
                 self._tool_schemas() if use_native else None,
@@ -436,6 +537,8 @@ class LLMAgent(BaseAgent):
                 response.prompt_tokens,
                 response.completion_tokens,
             )
+            self._emit_step("responding", _step + 1, task.id)
+            self._emit_usage(response, task.id)
             content = strip_think_blocks(response.content or "")
             if response.tool_calls:
                 calls: list[dict[str, Any]] = [
@@ -530,6 +633,16 @@ class LLMAgent(BaseAgent):
         ]
 
     async def _invoke_tool(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+        # Cockpit tracing wraps every call (including the fast rejections:
+        # a blocked tier-cap attempt is exactly what the operator wants to
+        # see in the agent's activity log). Tool crashes are converted to
+        # failure ToolResults inside, so `result` always exists.
+        started = time.monotonic()
+        result = await self._invoke_tool_untraced(name, arguments)
+        self._emit_tool(name, arguments, result, (time.monotonic() - started) * 1000)
+        return result
+
+    async def _invoke_tool_untraced(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         from harness.tools.registry import TOOL_ALIASES
 
         tool = next((t for t in self.tools if t.name == name), None)
@@ -627,6 +740,54 @@ async def _call_tool(tool: Tool, arguments: dict[str, Any]) -> ToolResult:
         return tool.execute(**arguments)
     except Exception as exc:
         return ToolResult(success=False, error=f"tool crashed: {exc}")
+
+
+_DIGEST_PATH_KEYS = ("path", "file", "file_path", "repo_path", "directory")
+_DIGEST_COMMAND_KEYS = ("command", "cmd")
+_DIGEST_PATTERN_KEYS = ("pattern", "query", "regex")
+_DIGEST_NODE_KEYS = ("node_id", "test", "node", "name")
+
+
+def _args_digest(name: str, arguments: dict[str, Any]) -> str:
+    """Short human rendering of one tool call's arguments (never contents).
+
+    Cockpit events are broadcast, so digests carry identifiers (paths,
+    patterns, commands) only - a read's payload must never ride an event.
+    Search-style tools carry pattern + scope: the pattern wins over the
+    scope path (the interesting argument), rendered together.
+    """
+    for key in _DIGEST_PATTERN_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, str) and value:
+            scope = arguments.get("path") or arguments.get("directory") or ""
+            prefix = f"'{value[:60]}'"
+            return (
+                f"pattern {prefix} in {str(scope)[:40]}".rstrip() if scope else f"pattern {prefix}"
+            )
+    for key in _DIGEST_PATH_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, str) and value:
+            return value[:120]
+    for key in _DIGEST_COMMAND_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, list) and value:
+            return " ".join(str(part) for part in value)[:120]
+        if isinstance(value, str) and value:
+            return value[:120]
+    for key in _DIGEST_NODE_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, str) and value:
+            return value[:120]
+    if arguments:
+        first = next(iter(arguments.values()))
+        return str(first)[:120]
+    return ""
+
+
+def _result_digest(result: ToolResult) -> str:
+    """Truncated outcome line for one tool call (output or error)."""
+    text = (result.output or result.error or "").strip().replace("\n", " ")
+    return text[:120]
 
 
 _MODE_DIRECTIVES: dict[GovernorMode, str] = {

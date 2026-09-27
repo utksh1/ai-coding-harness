@@ -30,6 +30,7 @@ from harness.agents.manager import (
     SpecialistSlot,
     assign_specialists,
     execution_batches,
+    routing_breakdown,
 )
 from harness.agents.specialists import build_agent
 from harness.agents.task import Task, TaskResult
@@ -185,14 +186,17 @@ class HarnessPipeline:
         """
         run_id = run_id or uuid.uuid4().hex[:12]
         governor = BudgetGovernor(self._store, self._config.budget, run_id)
-        for agent in self._agents.values():
-            agent.governor = governor
         metrics = MetricsCollector(self._store, governor)
         pack = EvidencePack(
             self._repo_root / self._config.run.results_dir,
             run_id,
             event_sink=event_sink or self._event_sink,
         )
+        for agent in self._agents.values():
+            agent.governor = governor
+            # Cockpit event contract (docs/cockpit-events.md): per-agent
+            # step/tool/usage events flow through the run's evidence trace.
+            agent.attach_tracer(pack.trace, run_id)
         flags = [
             f"prompt-injection pattern: {pattern}"
             for pattern in detect_prompt_injection(issue_text)
@@ -215,7 +219,28 @@ class HarnessPipeline:
         plan = await architect.decompose(issue_text, profile)
         metrics.stage_finished("architect")
         pack.trace(
-            {"event": "architect.plan", "run_id": run_id, "subtasks": [s.id for s in plan.subtasks]}
+            {
+                "event": "architect.plan",
+                "run_id": run_id,
+                "reproduction_test": plan.reproduction_test,
+                "risks": [risk[:200] for risk in plan.risks][:5],
+                # v2 contract: subtask OBJECTS (title/specialty/complexity/
+                # files/dependencies), not bare ids - the cockpit plan board
+                # renders from this event alone.
+                "subtasks": [
+                    {
+                        "id": s.id,
+                        "title": s.title,
+                        "description": s.description[:300],
+                        "specialty": s.specialty,
+                        "complexity": s.complexity,
+                        "files": list(s.files),
+                        "depends_on": list(s.depends_on),
+                        "acceptance": "; ".join(s.acceptance_criteria)[:300],
+                    }
+                    for s in plan.subtasks
+                ],
+            }
         )
 
         # Reproduction-first baseline (improvements §1.1): run the target
@@ -230,14 +255,17 @@ class HarnessPipeline:
                     "run_id": run_id,
                     "runnable": baseline.runnable,
                     "pre_existing_failures": len(baseline.failed),
+                    "reproduction_test": plan.reproduction_test,
                 }
             )
 
         task_results: list[TaskResult] = []
         metrics.stage_started("specialists")
         if self._manager is not None and plan.subtasks:
-            for batch in execution_batches(plan.subtasks):
-                outcomes = await self._run_batch(batch, governor, metrics, pack, run_id, architect)
+            for batch_no, batch in enumerate(execution_batches(plan.subtasks), start=1):
+                outcomes = await self._run_batch(
+                    batch, governor, metrics, pack, run_id, architect, batch_no
+                )
                 task_results.extend(outcomes)
         metrics.stage_finished("specialists")
         # Live token meter for the cockpit: cumulative usage after the
@@ -298,6 +326,7 @@ class HarnessPipeline:
         pack: EvidencePack,
         run_id: str,
         architect: ArchitectAgent,
+        batch_no: int = 1,
     ) -> list[TaskResult]:
         """Execute one file-disjoint batch, strictly sequentially.
 
@@ -337,12 +366,21 @@ class HarnessPipeline:
             chosen = assign_specialists(task, self._specialist_slots, team_average_tokens=0)
             agent_id = chosen[0] if chosen else next(iter(self._agents))
             agent = self._agents[agent_id]
+            slot = next(
+                (s for s in self._specialist_slots if s.agent_id == agent_id),
+                None,
+            )
             pack.trace(
                 {
                     "event": "specialist.assigned",
                     "run_id": run_id,
                     "task": task.id,
                     "agent": agent_id,
+                    "role": getattr(agent, "role", ""),
+                    "batch": batch_no,
+                    # The Manager's delegation moment: the §5.1 factor
+                    # contributions that put the task on this agent.
+                    "routing": routing_breakdown(task, slot) if slot else None,
                 }
             )
             ladder = RecoveryLadder(
@@ -352,6 +390,8 @@ class HarnessPipeline:
                 reroute=make_reroute(agent_id),
                 on_event=pack.trace,
                 governor=governor,
+                run_id=run_id,
+                agent_id=agent_id,
             )
 
             async def classify(t: Task, r: TaskResult) -> ErrorEscalation:
@@ -365,13 +405,20 @@ class HarnessPipeline:
 
             result = await ladder.run(task, agent.execute_task, classify)
             metrics.record_result(result, agent_id=agent_id)
+            # Attribute the result to the agent that ACTUALLY finished the
+            # work (an L2 reroute may have handed it to a collaborator).
+            executor = getattr(ladder, "last_executor_agent", None) or agent
             pack.trace(
                 {
                     "event": "specialist.result",
                     "run_id": run_id,
                     "task": task.id,
+                    "agent": getattr(executor, "agent_id", agent_id),
+                    "role": getattr(executor, "role", ""),
                     "success": result.success,
                     "summary": result.summary[:400],
+                    "steps": getattr(executor, "steps_used", 0),
+                    "tokens": getattr(executor, "traced_tokens", 0),
                 }
             )
             return result
@@ -398,6 +445,7 @@ class HarnessPipeline:
             tools=self._tools,
         )
         agent.governor = governor
+        agent.attach_tracer(pack.trace, run_id)
         self._agents[agent_id] = agent
         self._specialist_slots.append(
             SpecialistSlot(
@@ -413,6 +461,7 @@ class HarnessPipeline:
                 "run_id": run_id,
                 "agent": agent_id,
                 "for": primary_agent_id,
+                "role": "implementer",
             }
         )
         return agent
