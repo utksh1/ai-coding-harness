@@ -525,9 +525,7 @@ class HarnessPipeline:
         last_error: RuntimeError | TimeoutError | ConnectionError | None = None
         for attempt in range(1, self.ARCHITECT_STAGE_ATTEMPTS + 1):
             try:
-                profile = await architect.analyze_repository(
-                    summarize_repository(self._repo_root)
-                )
+                profile = await architect.analyze_repository(summarize_repository(self._repo_root))
                 plan = await architect.decompose(issue_text, profile)
                 return profile, plan
             except ModelAuthError:
