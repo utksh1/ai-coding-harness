@@ -150,3 +150,26 @@ async def test_auth_error_is_never_stage_retried(
     # Exactly one model call: no retries burned on a credentials failure.
     assert len(provider.calls) == 1
     store.close()
+
+
+async def test_run_max_steps_config_reaches_specialists(
+    demo_repo: Path, config: HarnessConfig, fake_model_config
+) -> None:
+    # Config plumbing: run.max_steps used to be silently ignored - every
+    # specialist ran the hardcoded default 16 regardless of the yaml.
+    from harness.config import RunConfig
+
+    config = config.model_copy(update={"run": RunConfig(max_steps=7)})
+    provider = FakeProvider(
+        fake_model_config,
+        responses=[
+            ModelResponse(content=PROFILE_JSON),
+            ModelResponse(content=PLAN_JSON),
+            ModelResponse(content="TASK_COMPLETE: done"),
+            ModelResponse(content=VERDICT_JSON),
+        ],
+    )
+    pipeline, store = _build(demo_repo, config, provider)
+    specialist = pipeline._agents["ver-1"]
+    assert specialist.max_steps == 7, "run.max_steps must reach every specialist"
+    store.close()

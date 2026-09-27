@@ -153,6 +153,7 @@ class HarnessPipeline:
                 stale_tool_results=agent_config.stale_tool_results,
                 knowledge_enabled=agent_config.knowledge,
                 knowledge_max_chars=agent_config.knowledge_max_chars,
+                max_steps=self._config.run.max_steps,
             )
             self._agents[agent.agent_id] = agent
             from harness.agents.prompts import ROLE_PRESETS
@@ -444,6 +445,7 @@ class HarnessPipeline:
             store=self._store,
             governor=self._placeholder_governor,
             tools=self._tools,
+            max_steps=self._config.run.max_steps,
         )
         agent.governor = governor
         agent.attach_tracer(pack.trace, run_id)
