@@ -154,7 +154,10 @@ class ModelProvider(ABC):
                 await self._backoff(attempt)
                 continue
 
-            if response.status_code in {401, 403}:
+            if response.status_code in {401, 403, 402}:
+                # 402 = payment/quota exhausted: a credentials-class failure
+                # (live-run finding: a mid-run 402 crashed the CLI with a raw
+                # httpx traceback instead of the documented exit code 3).
                 raise ModelAuthError(
                     f"{self._config.provider} rejected credentials "
                     f"(HTTP {response.status_code}): {response.text[:300]}"

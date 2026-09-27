@@ -35,7 +35,10 @@ tools:
   allow_network_commands: false
 
 budget:
-  total_tokens: 2000000
+  # Real-feature runs on sonnet-class models need ~2M tokens (plan +
+  # specialists + recovery retries + final review); 4M keeps the governor
+  # a genuine runaway rail instead of a mid-run cliff.
+  total_tokens: 4000000
 
 storage:
   backend: sqlite

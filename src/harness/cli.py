@@ -147,7 +147,16 @@ def solve_command(args: argparse.Namespace) -> int:
 
     store = create_context_store(config.storage)
     pipeline = HarnessPipeline(repo_root=repo_root, config=config, provider=provider, store=store)
-    outcome = asyncio.run(pipeline.run(issue, demo_mode=demo_mode))
+    from harness.infrastructure.model_providers.base import ModelAuthError
+
+    try:
+        outcome = asyncio.run(pipeline.run(issue, demo_mode=demo_mode))
+    except ModelAuthError as exc:
+        # Credentials rejected mid-run (401/403/402): the documented
+        # exit-code contract maps this to 3, not a traceback.
+        print(f"[error] model credentials rejected: {exc}")
+        store.close()
+        return 3
     print(f"outcome: {outcome.outcome_line}")
     print(f"run: {outcome.run_id}  evidence: {outcome.evidence_path}")
     for flag in outcome.flags:

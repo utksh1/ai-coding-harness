@@ -142,6 +142,26 @@ async def test_auth_rejection_is_not_retried(monkeypatch) -> None:
         await provider.generate(MSGS)
 
 
+async def test_payment_required_is_credentials_class_not_retried(monkeypatch) -> None:
+    """Live-run finding: a 402 (quota/payment exhausted) mid-run must raise
+    ModelAuthError so the CLI can exit 3 per the documented contract — not
+    escape as a raw httpx traceback."""
+    monkeypatch.setenv("K", "v")
+    client = _retry_transport([402])
+    provider = OpenAICompatibleProvider(
+        ModelConfig(
+            provider="openai",
+            name="m",
+            api_key_env="K",
+            max_retries=3,
+            extra={"backoff_base_seconds": 0.001},
+        ),
+        client=client,
+    )
+    with pytest.raises(ModelAuthError, match="402"):
+        await provider.generate(MSGS)
+
+
 async def test_retries_exhaustion_raises(monkeypatch) -> None:
     monkeypatch.setenv("K", "v")
     client = _retry_transport([503])

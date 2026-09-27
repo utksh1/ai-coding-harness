@@ -58,10 +58,16 @@ def role_matches_specialty(role: str, required: str | None) -> bool:
     """
     if not required:
         return False
-    from harness.agents.specialists import SPECIALTY_ROLES
+    from harness.agents.specialists import roles_for_specialty
 
-    roles = SPECIALTY_ROLES.get(required, (required,))
-    return role in roles
+    # One fallback, one source of truth: unknown specialties resolve via
+    # ``roles_for_specialty`` to an editing-capable default ("implementer").
+    # The old inline ``SPECIALTY_ROLES.get(required, (required,))`` treated the
+    # specialty itself as a role name, so architect coinages like
+    # "core-logic" matched nobody, every slot scored 0 on the 40% specialty
+    # factor, and the availability/load tie-break routed implementation work
+    # to the read-only Locator (live-run finding, parse repo).
+    return role in roles_for_specialty(required)
 
 
 def availability(current_tasks: int, max_concurrent: int) -> float:

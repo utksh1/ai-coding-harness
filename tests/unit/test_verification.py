@@ -146,3 +146,47 @@ async def test_pipeline_cancellation(repo) -> None:
 def test_changed_files_parses_diff() -> None:
     diff = "\n".join(["--- a/x.py", "+++ b/x.py", "+code"])
     assert VerificationPipeline(Path(".")).changed_files(diff) == ["x.py"]
+
+
+async def test_pipeline_budget_exhaustion_degrades_gracefully(repo, fake_model_config) -> None:
+    """Live-run regression (parse repo): BudgetExhausted raised inside a
+    stage (the Architect's final review) must degrade to a recorded stage
+    result — never propagate. The CLI must print an outcome and finalize the
+    evidence pack instead of crashing with a traceback."""
+    store = MemoryContextStore()
+    governor = BudgetGovernor(store, BudgetConfig(total_tokens=1000), "corr-budget")
+    governor.record("arch", "fake-model", 5000, 0)  # already over budget
+
+    from harness.agents.architect import ArchitectAgent
+    from harness.agents.llm_agent import StoreWindow
+
+    provider = FakeProvider(fake_model_config, responses=[ModelResponse(content="{}")])
+    architect = ArchitectAgent(
+        agent_id="arch",
+        model_config={},
+        tools=[],
+        context_window=StoreWindow(store, "arch", "planning"),
+        provider=provider,
+        store=store,
+        governor=governor,
+    )
+    plan = Plan(
+        subtasks=[SubTask(id="st-1", title="t", description="d", acceptance_criteria=["x"])]
+    )
+    events: list[dict] = []
+    (repo / "x.py").write_text("code = 1\n")  # self-check parses changed files
+    diff = "\n".join(["--- a/x.py", "+++ b/x.py", "@@ -1 +1 @@", "+code = 2"])
+    results = await _pipeline(repo).run(
+        diff, plan, architect, run_id="r-budget", tracer=events.append
+    )
+    by_name = {r.name: r for r in results}
+    # deterministic stages still ran and are recorded
+    assert by_name["1-integrity"].passed
+    assert by_name["3-local-tests"].passed
+    # the exhaustion is the stage-6 verdict: blocking, honest, no exception
+    assert not by_name["6-final-review"].passed
+    assert by_name["6-final-review"].blocking
+    assert "token budget exhausted" in by_name["6-final-review"].detail
+    # the cockpit streamed the stop too
+    stage_events = [e for e in events if e.get("event") == "verification.stage"]
+    assert any(e.get("stage") == "6-final-review" for e in stage_events)

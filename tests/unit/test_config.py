@@ -17,7 +17,11 @@ def test_defaults_when_no_file(isolated_env) -> None:
 def test_budget_thresholds() -> None:
     config = load_config()
     warn, surgical, stop = config.budget.thresholds()
-    assert (warn, surgical, stop) == (1_400_000, 1_800_000, 2_000_000)
+    # The 70/90/100 split is the contract; the total itself is the deployer's
+    # dial (harness.yaml) and must not be pinned by this test.
+    assert warn == int(config.budget.total_tokens * 0.7)
+    assert surgical == int(config.budget.total_tokens * 0.9)
+    assert stop == config.budget.total_tokens
 
 
 def test_example_config_is_valid() -> None:

@@ -25,3 +25,31 @@ def test_version_flag(capsys) -> None:
     except SystemExit as exc:
         assert exc.code == 0
     assert "harness" in capsys.readouterr().out
+
+
+def test_solve_mid_run_auth_rejection_exits_3(isolated_env, monkeypatch, capsys) -> None:
+    """Documented exit-code contract: credentials rejected mid-run (401/403/
+    402) is exit 3 with a clean message — not a raw traceback (live-run
+    finding: the proxy exhausted its quota and the CLI crashed on httpx)."""
+    import harness.engine.pipeline as pipeline_module
+    from harness.infrastructure.model_providers.base import ModelAuthError
+
+    (isolated_env / "harness.yaml").write_text(
+        "models:\n"
+        "  default:\n"
+        "    provider: openai-compatible\n"
+        "    name: m\n"
+        "    api_key_env: AI_API_KEY\n"
+    )
+    monkeypatch.setenv("AI_API_KEY", "sk-test")
+
+    class _RaisingPipeline:
+        def __init__(self, *args: object, **kwargs: object) -> None: ...
+
+        async def run(self, *args: object, **kwargs: object) -> object:
+            raise ModelAuthError("proxy rejected credentials (HTTP 402)")
+
+    monkeypatch.setattr(pipeline_module, "HarnessPipeline", _RaisingPipeline)
+    rc = main(["solve", "--issue", "do the thing", "--repo", str(isolated_env)])
+    assert rc == 3
+    assert "credentials rejected" in capsys.readouterr().out

@@ -97,3 +97,42 @@ def test_role_matches_specialty_synonyms() -> None:
     assert role_matches_specialty("implementer", "fix")
     assert not role_matches_specialty("locator", "bugfix")
     assert not role_matches_specialty("implementer", None)
+
+
+def test_unknown_specialty_routes_to_implementer_not_locator() -> None:
+    """Live-run regression (parse repo): architect coinages like 'core-logic'
+    are absent from SPECIALTY_ROLES. The fallback must resolve to the
+    editing-capable default (roles_for_specialty -> 'implementer'), not treat
+    the specialty as a role name, which zeroed the 40% specialty factor for
+    every slot and let the availability tie-break hand implementation work to
+    the read-only Locator."""
+    from harness.agents.manager import (
+        SpecialistSlot,
+        assign_specialists,
+        role_matches_specialty,
+    )
+    from harness.agents.specialists import roles_for_specialty
+    from harness.agents.task import Task
+
+    assert roles_for_specialty("core-logic") == ("implementer",)
+    assert role_matches_specialty("implementer", "core-logic")
+    assert not role_matches_specialty("locator", "core-logic")
+
+    locator = SpecialistSlot(
+        agent_id="locator-1",
+        specialties={"localization", "code-navigation"},
+        role="locator",
+    )
+    verifier = SpecialistSlot(
+        agent_id="ver-1",
+        specialties={"testing", "verification"},
+        role="verifier",
+    )
+    implementer = SpecialistSlot(
+        agent_id="impl-1",
+        specialties={"backend-api", "database", "frontend", "refactoring"},
+        role="implementer",
+    )
+    task = Task(id="t", title="Implement width semantics", description="", specialty="core-logic")
+    chosen = assign_specialists(task, [locator, verifier, implementer])
+    assert chosen == ["impl-1"]

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.agents.architect import ArchitectAgent, Plan, ReviewVerdict
+from harness.engine.budget import BudgetExhausted
 from harness.security.secret_scanner import block_reason, scan_diff
 from harness.tools.editing import SyntaxCheckTool
 from harness.tools.execution import RunTestsTool
@@ -110,21 +111,35 @@ class VerificationPipeline:
         timeline, and the dashboard's stage panel becomes live.
         """
         self.results = []
-        stages: tuple[Callable[..., Awaitable[StageResult]], ...] = (
-            self._stage_integrity,
-            self._stage_self_check,
-            self._stage_local_tests,
-            self._stage_code_review,
-            self._stage_security,
-            self._stage_final_review,
+        stages: tuple[tuple[str, Callable[..., Awaitable[StageResult]]], ...] = (
+            ("1-integrity", self._stage_integrity),
+            ("2-self-check", self._stage_self_check),
+            ("3-local-tests", self._stage_local_tests),
+            ("4-code-review", self._stage_code_review),
+            ("5-security", self._stage_security),
+            ("6-final-review", self._stage_final_review),
         )
-        for stage in stages:
+        for name, stage in stages:
             if self.cancelled:
                 result = StageResult(name="cancelled", passed=False, detail="pipeline cancelled")
                 self.results.append(result)
                 self._emit_stage(tracer, run_id, result)
                 break
-            result = await _timed(stage, diff, plan, architect)
+            try:
+                result = await _timed(stage, diff, plan, architect)
+            except BudgetExhausted as exc:
+                # The budget governor is a hard stop, not a quality verdict:
+                # keep every stage that already ran, record the exhaustion as
+                # a blocking (unreviewed) outcome, and let the caller finalize
+                # the evidence pack. Live-run finding (parse repo): an
+                # exhaustion mid-stage-6 used to propagate up, crashing the
+                # CLI with a traceback and skipping evidence finalization.
+                result = StageResult(
+                    name,
+                    passed=False,
+                    detail=f"skipped: token budget exhausted ({exc})",
+                    blocking=True,
+                )
             self.results.append(result)
             self._emit_stage(tracer, run_id, result)
             if not result.passed and result.blocking:
