@@ -37,8 +37,15 @@ def test_search_text_glob_and_errors(repo) -> None:
     (repo / "notes.md").write_text("def not code\n")
     result = SearchTextTool(repo).execute(pattern="def", glob="*.py")
     assert "notes.md" not in result.output
-    assert not SearchTextTool(repo).execute(pattern="x", path="src/calc.py").success
+    # A file path is a legitimate single-file grep target (live-run finding:
+    # erroring here forced read -> search -> fail loops).
+    single = SearchTextTool(repo).execute(pattern=r"def \w+", path="src/calc.py")
+    assert single.success and "src/calc.py:1" in single.output
     assert not SearchTextTool(repo).execute(pattern="x", path="../outside").success
+    # Empty path means repo root, not an error (six identical 'empty path'
+    # failures burned a real run's budget).
+    empty = SearchTextTool(repo).execute(pattern="def \\w+", path="")
+    assert empty.success and "src/calc.py:1" in empty.output
 
 
 def test_apply_edit_exact(repo) -> None:

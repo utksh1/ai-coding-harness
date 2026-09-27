@@ -58,8 +58,15 @@ _CAPABILITY_CACHE = CapabilityCache()
 REPEAT_STRIKE_THRESHOLD = 2
 DEDUP_TOOLS = frozenset({"filesystem_read", "filesystem_list", "search_text"})
 """Deterministic tools whose identical repeat calls return a cached result."""
-MUTATING_TOOLS = frozenset({"apply_edit", "code_execution"})
+MUTATING_TOOLS = frozenset({"apply_edit", "code_execution", "filesystem_write"})
 """Successful calls invalidate the dedup cache (files may have changed)."""
+TEST_TOOLS = frozenset({"run_tests"})
+"""Tools that verify the working tree; edits should be followed by one."""
+FAILURE_STREAK_THRESHOLD = 2
+"""Identical (tool, error) failures before the loop injects usage coaching."""
+MAX_COACH_NUDGES = 4
+_BUDGET_WARN_FRACTIONS = (0.7, 0.9)
+UNVERIFIED_EDIT_GRACE_STEPS = 4
 _NUDGE = (
     "You are not finished: use the available tools to complete the task now. "
     f"Reply with '{FINAL_MARKER}: <summary>' ONLY when done."
@@ -69,6 +76,30 @@ _REPEAT_NUDGE = (
     "results. Change approach - read different files, apply an edit, or "
     f"finish with {FINAL_MARKER}."
 )
+_STEP_BUDGET_WARN = (
+    "STEP BUDGET: {used} of {total} steps used. Focus on completing the core "
+    "change, verify with run_tests, then finish with {marker}: <summary>."
+)
+_UNVERIFIED_EDIT_NUDGE = (
+    "You have edited files but have not run the tests since. Call run_tests "
+    "now to verify your changes before doing anything else."
+)
+_COACH_NUDGE = (
+    "Your last {n} calls to {tool} failed the same way: {error}\n"
+    "{usage}\nFix the arguments on your next call."
+)
+_TOOL_USAGE_EXAMPLES = {
+    "search_text": "search_text(pattern=r'def\\s+parse', path='.', glob='*.py')",
+    "filesystem_read": "filesystem_read(path='src/main.py', start_line=1, end_line=80)",
+    "apply_edit": (
+        "apply_edit(path='src/main.py', search='<exact current text from the file>', "
+        "replace='<new text>')"
+    ),
+    "run_tests": "run_tests(path='.')",
+    "glob_files": "glob_files(pattern='**/*.py', path='.')",
+    "filesystem_list": "filesystem_list(path='.')",
+    "filesystem_write": "filesystem_write(path='new_file.py', content='...', mode='create')",
+}
 
 _STEP_LIMIT_ERROR = "step limit reached before the agent finished"
 
@@ -369,11 +400,19 @@ class LLMAgent(BaseAgent):
         return self._active_task or getattr(self.context_window, "task_id", None)
 
     def _reset_dedup_state(self) -> None:
-        """Fresh per-task dedup cache (#62): files may change between tasks."""
+        """Fresh per-task dedup + coaching state (#62): files change between tasks."""
         self._dedup_cache: dict[tuple[str, str], str] = {}
         self._dedup_strikes: dict[tuple[str, str], int] = {}
         self._round_dedup_strikes: list[int] = []
         self._repeat_nudges = 0
+        # Loop coaching (live-run findings: 30/121 tool calls failed with
+        # repeated identical argument mistakes and the model never learned).
+        self._fail_cache: dict[tuple[str, str], str] = {}
+        self._failure_streaks: dict[tuple[str, str], int] = {}
+        self._coach_nudges = 0
+        self._budget_warned: set[float] = set()
+        self._last_mutation_step: int | None = None
+        self._unverified_nudge_pending = False
 
     # -- BaseAgent contract ---------------------------------------------------
     @property
@@ -526,6 +565,7 @@ class LLMAgent(BaseAgent):
             self.governor.check()
             self.governor.reserve(_estimate_tokens(self._messages(task, ledger, use_native)))
             self._last_steps = _step + 1
+            self._warn_step_budget(_step + 1)
             self._emit_step("thinking", _step + 1, task.id)
             response = await self.provider.generate(
                 self._messages(task, ledger, use_native),
@@ -552,12 +592,15 @@ class LLMAgent(BaseAgent):
                 self.context_window.append("assistant", content, tool_calls=calls)
                 for call in calls:
                     result = await self._invoke_tool(call["name"], call["arguments"])
+                    self._track_tool_outcome(call["name"], call["arguments"], result, _step + 1)
                     self.context_window.append(
                         "tool",
                         f"[{call['name']}] {result.output or result.error}",
                         tool_call_id=call["id"],
                         tool_name=call["name"],
                     )
+                self._coach_after_round()
+                self._nudge_unverified_edits(_step + 1)
                 round_strikes = self._round_dedup_strikes
                 self._round_dedup_strikes = []
                 if (
@@ -574,12 +617,15 @@ class LLMAgent(BaseAgent):
                 self.context_window.append("assistant", content, tool_calls=calls)
                 for call in calls:
                     result = await self._invoke_tool(call["name"], call["arguments"])
+                    self._track_tool_outcome(call["name"], call["arguments"], result, _step + 1)
                     self.context_window.append(
                         "user",
                         f"TOOL_RESULT ({call['name']}): {result.output or result.error}",
                         tool_call_id=call["id"],
                         tool_name=call["name"],
                     )
+                self._coach_after_round()
+                self._nudge_unverified_edits(_step + 1)
                 continue
             if FINAL_MARKER in content:
                 self._maybe_compress(task.id)
@@ -602,6 +648,84 @@ class LLMAgent(BaseAgent):
         if not self.knowledge_enabled:
             return ""
         return knowledge_section(self.role, max_chars=self.knowledge_max_chars)
+
+    # -- loop coaching ----------------------------------------------------------
+    # Live-run findings (run e54878f8): 30 of 121 tool calls failed, the SAME
+    # argument mistakes repeated up to six times, edits were never followed by
+    # run_tests, and the step limit arrived without warning. These hooks make
+    # the harness itself the teacher: cheap, bounded, contract-driven nudges.
+
+    def _warn_step_budget(self, step: int) -> None:
+        """Inject a budget warning once at each configured fraction of the cap."""
+        for fraction in _BUDGET_WARN_FRACTIONS:
+            threshold = max(1, round(self.max_steps * fraction))
+            if step >= threshold and fraction not in self._budget_warned:
+                self._budget_warned.add(fraction)
+                self.context_window.append(
+                    "user",
+                    _STEP_BUDGET_WARN.format(used=step, total=self.max_steps, marker=FINAL_MARKER),
+                )
+
+    def _track_tool_outcome(
+        self, name: str, arguments: dict[str, Any], result: ToolResult, step: int
+    ) -> None:
+        """Record success/failure signatures that drive the coaching nudges."""
+        if result.success:
+            for key in [k for k in self._failure_streaks if k[0] == name]:
+                self._failure_streaks.pop(key, None)
+            if name in MUTATING_TOOLS:
+                self._last_mutation_step = step
+                self._unverified_nudge_pending = True
+            elif name in TEST_TOOLS:
+                # A passing test run clears the pending verify obligation.
+                self._unverified_nudge_pending = False
+        else:
+            # The failure-dedup note is appended to the raw error; strip it so
+            # first failure and deduped repeats map to the same signature and
+            # the streak (and therefore the coaching) actually accumulates.
+            raw_error = (result.error or "unknown error").split("\n[dedup:", 1)[0]
+            signature = raw_error[:120]
+            key = (name, signature)
+            self._failure_streaks[key] = self._failure_streaks.get(key, 0) + 1
+
+    def _coach_after_round(self) -> None:
+        """After a tool round, coach the worst repeated failure with usage."""
+        if self._coach_nudges >= MAX_COACH_NUDGES or not self._failure_streaks:
+            return
+        worst = max(self._failure_streaks.items(), key=lambda kv: kv[1])
+        (name, signature), streak = worst
+        if streak < FAILURE_STREAK_THRESHOLD:
+            return
+        self._coach_nudges += 1
+        self.context_window.append(
+            "user",
+            _COACH_NUDGE.format(n=streak, tool=name, error=signature, usage=self._usage_hint(name)),
+        )
+
+    def _nudge_unverified_edits(self, step: int) -> None:
+        """Edits without a subsequent test run get a bounded verify nudge."""
+        if not self._unverified_nudge_pending or self._last_mutation_step is None:
+            return
+        # A successful test call always clears the pending flag, so reaching
+        # here means the mutation was never verified.
+        if step - self._last_mutation_step < UNVERIFIED_EDIT_GRACE_STEPS:
+            return
+        self._unverified_nudge_pending = False
+        self.context_window.append("user", _UNVERIFIED_EDIT_NUDGE)
+
+    def _usage_hint(self, name: str) -> str:
+        """Actionable usage line for a failing tool: curated or schema-derived."""
+        if name in _TOOL_USAGE_EXAMPLES:
+            return f"Correct usage: {_TOOL_USAGE_EXAMPLES[name]}"
+        tool = next((t for t in self.tools if t.name == name), None)
+        if tool is None:
+            return "Check the tool's parameter schema and retry with valid arguments."
+        required = tool.parameters.get("required", [])
+        properties = tool.parameters.get("properties", {})
+        rendered = ", ".join(
+            f"{key}=<{properties.get(key, {}).get('type', 'string')}>" for key in required
+        )
+        return f"Correct usage: {name}({rendered}) - {tool.description}"
 
     def _messages(self, task: Task, ledger: str, use_native: bool = True) -> list[dict[str, Any]]:
         mode_directive = _MODE_DIRECTIVES.get(self.governor.mode(), "")
@@ -689,12 +813,14 @@ class LLMAgent(BaseAgent):
         return result
 
     async def _dedup_or_execute(self, tool: Tool, arguments: dict[str, Any]) -> ToolResult:
-        """Cache deterministic tools' identical repeat calls (#62).
+        """Cache deterministic tools' repeat calls - successes AND failures (#62).
 
-        A cache hit returns the stored output with a marker instead of
-        re-executing; strikes per key drive the loop nudge in `_loop`. Any
-        successful mutating tool invalidates the whole cache - finer-grained
-        path tracking is not worth the correctness risk.
+        A success hit returns the stored output with a marker; a failure hit
+        returns the stored error with a "you already tried this exact call"
+        note (re-failing the identical call only burns context). Strikes per
+        key drive the loop nudge in `_loop`. Any successful mutating tool
+        invalidates the whole cache - finer-grained path tracking is not
+        worth the correctness risk.
         """
         key = (tool.name, json.dumps(arguments, sort_keys=True, default=str))
         if tool.name in DEDUP_TOOLS and key in self._dedup_cache:
@@ -710,14 +836,28 @@ class LLMAgent(BaseAgent):
                     "change arguments or move on]"
                 ),
             )
+        if tool.name in DEDUP_TOOLS and key in self._fail_cache:
+            note = (
+                "[dedup: this exact call already failed with this exact error; "
+                "change the arguments or switch approach]"
+            )
+            return ToolResult(
+                success=False,
+                error=f"{self._fail_cache[key]}\n{note}",
+                data={"dedup_hit": True},
+            )
         result = await _call_tool(tool, arguments)
         if result.success:
             if tool.name in DEDUP_TOOLS:
                 self._dedup_cache[key] = result.output
                 self._dedup_strikes.pop(key, None)
+                self._fail_cache.pop(key, None)
             elif tool.name in MUTATING_TOOLS:
                 self._dedup_cache.clear()
                 self._dedup_strikes.clear()
+                self._fail_cache.clear()
+        elif tool.name in DEDUP_TOOLS:
+            self._fail_cache[key] = result.error or ""
         return result
 
     def _maybe_compress(self, task_id: str) -> None:

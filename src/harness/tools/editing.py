@@ -61,16 +61,26 @@ class SearchTextTool(Tool):
             compiled = re.compile(pattern)
         except re.error as exc:  # defensive: validation should catch this
             return ToolResult(success=False, error=f"invalid regex: {exc}")
+        # Empty/omitted path means repo root - models pass "" constantly
+        # (live-run finding: six identical 'empty path' failures in one task).
+        path = path or "."
         try:
             root = sanitize_path(self._root, path)
         except ValueError as exc:
             return ToolResult(success=False, error=str(exc))
+        if root.is_file():
+            # A file path is a legitimate grep target (the model wants the
+            # matches inside that one file); erroring forced read -> search
+            # -> fail loops in live runs.
+            return self._search_files([root], compiled, pattern)
         if not root.is_dir():
             return ToolResult(success=False, error=f"not a directory: {path}")
+        candidates = root.rglob(glob) if glob else root.rglob("*")
+        return self._search_files(candidates, compiled, pattern)
 
+    def _search_files(self, candidates: Any, compiled: re.Pattern[str], pattern: str) -> ToolResult:
         matches: list[str] = []
         files_scanned = 0
-        candidates = root.rglob(glob) if glob else root.rglob("*")
         for file_path in candidates:
             if not file_path.is_file() or file_path.suffix in {".pyc", ".db"}:
                 continue
@@ -128,6 +138,41 @@ def _whitespace_tolerant(lines: list[str], search_lines: list[str]) -> int | Non
     return None
 
 
+FUZZY_CONTEXT_LINES = 4
+FUZZY_CONTEXT_MAX_LINES = 40
+FUZZY_MIN_SIMILARITY = 0.4
+
+
+def _closest_context(original: str, search: str) -> str | None:
+    """Line-numbered region of `original` most similar to `search`.
+
+    The single biggest live-run failure mode is a failed `apply_edit`
+    followed by a full file re-read (40+ reads in one task, step budget
+    gone). Returning the closest actual region lets the model correct its
+    `search` text in ONE round-trip instead of read -> guess -> fail again.
+    Returns ``None`` when nothing is reasonably similar (truly not found).
+    """
+    lines = original.splitlines()
+    query = next((q.strip() for q in search.splitlines() if q.strip()), None)
+    if not lines or not query:
+        return None
+    best_ratio, best_idx = 0.0, 0
+    for index, line in enumerate(lines):
+        ratio = difflib.SequenceMatcher(None, query, line.strip()).ratio()
+        if ratio > best_ratio:
+            best_ratio, best_idx = ratio, index
+    if best_ratio < FUZZY_MIN_SIMILARITY:
+        return None
+    span = min(len(search.splitlines()) + FUZZY_CONTEXT_LINES, FUZZY_CONTEXT_MAX_LINES)
+    start = max(0, best_idx - FUZZY_CONTEXT_LINES)
+    end = min(len(lines), best_idx + span)
+    snippet = "\n".join(f"{n + 1:5d}| {lines[n]}" for n in range(start, end))
+    return (
+        f"closest actual region in the file (line {best_idx + 1}, "
+        f"similarity {best_ratio:.2f}):\n{snippet}"
+    )
+
+
 class ApplyEditTool(Tool):
     """apply_edit: search/replace edit with fuzzy fallback and diff output."""
 
@@ -174,17 +219,29 @@ class ApplyEditTool(Tool):
 
         updated = self._apply(original, search, replace)
         if updated is None:
+            context = _closest_context(original, search)
+            if context:
+                message = (
+                    "search text not found in "
+                    + path
+                    + ". The 'search' argument must be the EXACT current file text. "
+                    "Copy it from the actual region below and retry apply_edit:\n" + context
+                )
+            else:
+                message = (
+                    "search text not found (even whitespace-tolerant); "
+                    f"read the file again and copy the exact text: {path}"
+                )
+            return ToolResult(success=False, error=message, data={"path": path})
+        if updated == original:
             return ToolResult(
                 success=False,
                 error=(
-                    "search text not found (even whitespace-tolerant); "
-                    f"read the file again and copy the exact text: {path}"
+                    "edit would not change the file: 'search' and 'replace' produce "
+                    "identical content. If this change is already applied, verify "
+                    "with run_tests and move on."
                 ),
                 data={"path": path},
-            )
-        if updated == original:
-            return ToolResult(
-                success=False, error="edit would not change the file", data={"path": path}
             )
         self._backup(target, original)
         with target.open("w", encoding="utf-8", newline="") as handle:

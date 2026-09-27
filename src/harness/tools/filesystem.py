@@ -66,6 +66,9 @@ class ReadFileTool(Tool):
     def execute(
         self, path: str, start_line: int | None = None, end_line: int | None = None, **_: Any
     ) -> ToolResult:
+        # Models pass "" for the path when they mean the obvious thing;
+        # erroring burns a whole round-trip. Default like filesystem_list.
+        path = path or "."
         try:
             target = sanitize_path(self._root, path)
         except ValueError as exc:
@@ -110,6 +113,7 @@ class ListDirTool(Tool):
         return True
 
     def execute(self, path: str = ".", **_: Any) -> ToolResult:
+        path = path or "."
         try:
             target = sanitize_path(self._root, path)
         except ValueError as exc:

@@ -70,7 +70,8 @@ IMPLEMENTER = RolePreset(
         "You are the Implementer: you make the minimal correct change for a\n"
         "subtask, working from the localization artifact. Prefer surgical\n"
         "edits; never touch tests unless the subtask explicitly says so; keep\n"
-        "the diff minimal and formatted."
+        "the diff minimal and formatted. After each edit, run run_tests to\n"
+        "verify before continuing; never finish with unverified edits."
     ),
     specialties=frozenset({"backend-api", "database", "frontend", "refactoring"}),
     max_tool_tier=ToolTier.DEVELOPMENT,
