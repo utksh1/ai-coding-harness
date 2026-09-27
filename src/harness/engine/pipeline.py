@@ -36,7 +36,7 @@ from harness.agents.manager import (
 from harness.agents.specialists import build_agent
 from harness.agents.task import Task, TaskResult
 from harness.config import HarnessConfig
-from harness.engine.budget import BudgetGovernor
+from harness.engine.budget import BudgetExhausted, BudgetGovernor
 from harness.engine.evidence import EvidencePack, build_summary
 from harness.engine.recovery import Executor, RecoveryLadder, Rerouter
 from harness.infrastructure.model_providers import ModelAuthError
@@ -188,7 +188,18 @@ class HarnessPipeline:
         id. Left unset, the pipeline mints its own (eval-mode CLI behavior).
         """
         run_id = run_id or uuid.uuid4().hex[:12]
-        governor = BudgetGovernor(self._store, self._config.budget, run_id)
+        # Wall-clock rail (live finding: run.wall_clock_seconds was configured
+        # but never enforced - a rate-limited provider can starve a run for
+        # hours without spending the token budget). The governor raises
+        # RunDeadlineExceeded on every model call and stage boundary past the
+        # deadline; the finalize path below turns it into an honest
+        # run.end(success=false) with the stop reason.
+        governor = BudgetGovernor(
+            self._store,
+            self._config.budget,
+            run_id,
+            wall_clock_seconds=self._config.run.wall_clock_seconds,
+        )
         metrics = MetricsCollector(self._store, governor)
         pack = EvidencePack(
             self._repo_root / self._config.run.results_dir,
@@ -263,12 +274,18 @@ class HarnessPipeline:
 
         task_results: list[TaskResult] = []
         metrics.stage_started("specialists")
-        if self._manager is not None and plan.subtasks:
-            for batch_no, batch in enumerate(execution_batches(plan.subtasks), start=1):
-                outcomes = await self._run_batch(
-                    batch, governor, metrics, pack, run_id, architect, batch_no
-                )
-                task_results.extend(outcomes)
+        stop_reason = ""
+        try:
+            if self._manager is not None and plan.subtasks:
+                for batch_no, batch in enumerate(execution_batches(plan.subtasks), start=1):
+                    governor.check()  # batch boundary: no new work past the deadline
+                    outcomes = await self._run_batch(
+                        batch, governor, metrics, pack, run_id, architect, batch_no
+                    )
+                    task_results.extend(outcomes)
+        except BudgetExhausted as exc:
+            stop_reason = str(exc)
+            pack.trace({"event": "budget.exhausted", "run_id": run_id, "reason": stop_reason[:300]})
         metrics.stage_finished("specialists")
         # Live token meter for the cockpit: cumulative usage after the
         # specialist phase (the UI sets, never accumulates, this value).
@@ -276,10 +293,16 @@ class HarnessPipeline:
 
         metrics.stage_started("verification")
         diff = self._working_diff()
-        verification = VerificationPipeline(self._repo_root, baseline)
-        stage_results = await verification.run(
-            diff, plan, architect, run_id=run_id, tracer=pack.trace
-        )
+        stage_results: list[Any] = []
+        try:
+            governor.check()  # verification costs model calls too; skip it honestly
+            verification = VerificationPipeline(self._repo_root, baseline)
+            stage_results = await verification.run(
+                diff, plan, architect, run_id=run_id, tracer=pack.trace
+            )
+        except BudgetExhausted as exc:
+            stop_reason = stop_reason or str(exc)
+            pack.trace({"event": "budget.exhausted", "run_id": run_id, "reason": stop_reason[:300]})
         metrics.stage_finished("verification")
         pack.trace(self._tokens_event(run_id, governor, "verification"))
         pack.patch(diff)
@@ -287,13 +310,19 @@ class HarnessPipeline:
         pack.token_report(metrics.report())
         if baseline is not None:
             pack.baseline_report(baseline.to_report())
-        overall = all(r.passed for r in stage_results if r.blocking) and all(
-            r.success for r in task_results
+        overall = (
+            not stop_reason
+            and all(r.passed for r in stage_results if r.blocking)
+            and all(r.success for r in task_results)
         )
         outcome_line = (
             "VERIFIED: all tasks completed and gates passed"
             if overall
-            else "NOT VERIFIED: see test-report.md and task failures"
+            else (
+                f"NOT VERIFIED: run stopped by budget governor - {stop_reason}"
+                if stop_reason
+                else "NOT VERIFIED: see test-report.md and task failures"
+            )
         )
         plan_markdown = (
             "\n".join(
@@ -307,7 +336,10 @@ class HarnessPipeline:
                 run_id, issue_text, plan_markdown, stage_report(stage_results), outcome_line, flags
             )
         )
-        pack.trace({"event": "run.end", "run_id": run_id, "success": overall})
+        run_end: dict[str, Any] = {"event": "run.end", "run_id": run_id, "success": overall}
+        if stop_reason:
+            run_end["stop_reason"] = stop_reason[:300]
+        pack.trace(run_end)
         self._audit.append("pipeline", "run.end", run_id, {"success": overall, "flags": len(flags)})
         return PipelineOutcome(
             run_id=run_id,
@@ -531,6 +563,12 @@ class HarnessPipeline:
                 plan = await architect.decompose(issue_text, profile)
                 return profile, plan
             except ModelAuthError:
+                raise
+            except BudgetExhausted:
+                # A rail stop (wall clock / token budget) never heals with
+                # retries - propagate immediately (BudgetExhausted subclasses
+                # RuntimeError, so it must be excluded before the transport
+                # retry clause below).
                 raise
             except (RuntimeError, TimeoutError, ConnectionError) as exc:
                 last_error = exc
