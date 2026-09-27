@@ -48,10 +48,21 @@ func FormatActivity(ev Event, s *State) formattedLine {
 		if ev.Success != nil && *ev.Success {
 			return formattedLine{"run ended · " + ev.Outcome, classOK}
 		}
-		return formattedLine{"run ended · " + ev.Outcome, classErr}
+		detail := ev.Outcome
+		if ev.StopReason != "" {
+			detail = firstNonEmpty(ev.Outcome, "stopped") + " · " + ev.StopReason
+		}
+		return formattedLine{"run ended · " + detail, classErr}
 
 	case "run.failed":
 		return formattedLine{"run FAILED · " + firstNonEmpty(ev.Error, ev.Stage), classErr}
+
+	case "budget.exhausted":
+		reason := ev.Reason
+		if reason == "" {
+			reason = "budget governor tripped"
+		}
+		return formattedLine{"⏱ run stopped · " + reason, classErr}
 
 	case "architect.profile":
 		return formattedLine{"profile: " + profileLine(ev.Profile), classDim}

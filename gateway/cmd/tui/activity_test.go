@@ -141,6 +141,35 @@ func TestFormatActivityGatesTokensRun(t *testing.T) {
 	}
 }
 
+func TestFormatActivityBudgetStop(t *testing.T) {
+	st := collabState(t)
+
+	stop := FormatActivity(Event{
+		Kind: "budget.exhausted", RunID: "8a0899e6",
+		Reason: "wall clock exceeded: 999s >= 1800s limit",
+	}, st)
+	if stop.Line != "⏱ run stopped · wall clock exceeded: 999s >= 1800s limit" {
+		t.Fatalf("budget stop line = %q", stop.Line)
+	}
+	if stop.Class != classErr {
+		t.Fatalf("budget stop class = %d", stop.Class)
+	}
+
+	noReason := FormatActivity(Event{Kind: "budget.exhausted"}, st)
+	if noReason.Line != "⏱ run stopped · budget governor tripped" {
+		t.Fatalf("budget fallback line = %q", noReason.Line)
+	}
+
+	end := FormatActivity(Event{
+		Kind: "run.end", Success: boolPtr(false),
+		Outcome:    "NOT VERIFIED: run stopped by budget governor - wall clock exceeded",
+		StopReason: "wall clock exceeded: 999s >= 1800s limit",
+	}, st)
+	if !strings.Contains(end.Line, "wall clock exceeded: 999s") || end.Class != classErr {
+		t.Fatalf("run.end stop_reason line = %+v", end)
+	}
+}
+
 func TestFormatActivityAgentPulses(t *testing.T) {
 	st := collabState(t)
 

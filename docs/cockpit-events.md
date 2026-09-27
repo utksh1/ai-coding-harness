@@ -40,11 +40,18 @@ agent named in `"for"` (their id is `<parent>-collab-N`).
 ```json
 {"event": "run.start", "run_id": "d1efdd2ac70f", "flags": [], "issue": "..."}
 {"event": "run.end", "run_id": "d1efdd2ac70f", "success": true, "outcome": "VERIFIED: all tasks completed and gates passed"}
+{"event": "run.end", "run_id": "d1efdd2ac70f", "success": false, "outcome": "NOT VERIFIED: run stopped by budget governor - wall clock exceeded: 999s >= 1800s limit",
+ "stop_reason": "wall clock exceeded: 999s >= 1800s limit"}
+{"event": "budget.exhausted", "run_id": "d1efdd2ac70f", "reason": "wall clock exceeded: 999s >= 1800s limit"}
 {"event": "run.failed", "run_id": "d1efdd2ac70f", "error": "...", "stage": "specialists"}
 ```
 
 `run.start` carries the first 2000 chars of the issue. `run.failed` replaces
-`run.end` on transport/configuration failure.
+`run.end` on transport/configuration failure. When a budget rail (wall
+clock or token cap) stopped the run mid-flight, `run.end` carries
+`success=false` plus `stop_reason`, preceded by one `budget.exhausted` event
+with the same reason — render both as a hard stop (⏱) in the feed/timeline,
+and expect verification to be skipped rather than limping.
 
 ## 2. Architect phase
 
@@ -137,6 +144,7 @@ batch number (batches run sequentially; members were file-disjoint).
 {"event": "tokens.usage", "run_id": "d1efdd2ac70f", "phase": "specialists",
  "governor_mode": "NORMAL", "usage": {"prompt_tokens": 1900000, "completion_tokens": 210000,
  "total_tokens": 2110000}}
+{"event": "budget.exhausted", "run_id": "d1efdd2ac70f", "reason": "token budget exhausted: 4000000 >= 4000000"}
 ```
 
 The six stages in order: `1-integrity, 2-self-check, 3-local-tests,

@@ -1167,13 +1167,14 @@ var EV_ICONS = {
   'agent.step': '◐', 'agent.tool': '⚙', 'agent.usage': '⚡',
   'recovery.l1_retry': '↺', 'recovery.l2_guidance': '↯', 'recovery.l2_reroute': '⇄',
   'recovery.l3_replan': '↻', 'recovery.l3_skipped_budget': '⏻',
-  'verification.stage': '⊙', 'tokens.usage': '⚡'
+  'verification.stage': '⊙', 'tokens.usage': '⚡', 'budget.exhausted': '⏱'
 };
 function evClass(ev) {
   var k = ev.event || '';
   if (k === 'run.start') return 'c-run';
   if (k === 'run.end') return ev.success !== false ? 'c-ok' : 'c-fail';
   if (k === 'run.failed') return 'c-fail';
+  if (k === 'budget.exhausted') return 'c-fail';
   if (k === 'architect.profile' || k === 'architect.plan') return 'c-arch';
   if (k === 'architect.retry') return 'c-warn';
   if (k === 'baseline.captured') return 'c-dim';
@@ -1201,9 +1202,14 @@ function describeEvent(ev) {
     case 'run.end':
       icon = ev.success !== false ? '✓' : '✕';
       text = (ev.success !== false ? 'VERIFIED — ' : 'NOT VERIFIED — ') + (ev.outcome || '');
+      if (ev.stop_reason) text += ' · ' + ev.stop_reason;
       break;
     case 'run.failed':
       text = 'run failed' + (ev.stage ? ' at stage ' + ev.stage : '') + ': ' + (ev.error || 'unknown error');
+      break;
+    case 'budget.exhausted':
+      icon = '⏱';
+      text = 'run stopped by budget governor — ' + (ev.reason || 'wall clock / token rail tripped');
       break;
     case 'architect.profile':
       var p = ev.profile || {};

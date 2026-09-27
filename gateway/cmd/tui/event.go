@@ -66,6 +66,8 @@ type Event struct {
 	Skipped         *bool   `json:"skipped"`
 	Detail          string  `json:"detail"`
 	DurationSeconds float64 `json:"duration_seconds"`
+	Reason          string  `json:"reason"`      // budget.exhausted
+	StopReason      string  `json:"stop_reason"` // run.end budget stop
 
 	// baseline.captured.
 	Runnable            *bool `json:"runnable"`
