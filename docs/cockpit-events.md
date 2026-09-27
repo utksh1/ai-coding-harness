@@ -59,10 +59,17 @@ agent named in `"for"` (their id is `<parent>-collab-N`).
     "complexity": 3, "files": ["tests/test_width_alignment.py"], "depends_on": ["st-1"],
     "acceptance": "...", "risk_notes": ""}
  ]}
+{"event": "architect.retry", "run_id": "d1efdd2ac70f", "attempt": 1, "error": "model request failed after 7 attempts: HTTP 503"}
 ```
 
 `subtasks` is a list of objects (v1 sent bare ids; v2 consumers MUST treat a
 string entry as `{"id": <string>}` with everything else unknown).
+
+`architect.retry` fires between profile and plan when a transient model
+transport failure (e.g. a flapping provider pool) forced a stage-level
+retry — render it as a warning line ("provider outage, retrying") in the
+activity feed/timeline; `attempt` counts failed attempts so far. Three
+retries without success end the run via `run.failed`.
 
 ## 3. Manager delegation
 
