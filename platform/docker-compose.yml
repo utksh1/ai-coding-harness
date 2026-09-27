@@ -35,6 +35,9 @@ services:
     environment:
       - ORCHESTRATOR_URL=http://orchestrator:8000
       - REDIS_ADDR=redis:6379
+      - GATEWAY_EVENTS_LOG=/data/gateway-events.jsonl
+    volumes:
+      - gateway-events:/data
     ports:
       - "8080:8080"
     depends_on:

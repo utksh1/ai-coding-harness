@@ -7,10 +7,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -35,6 +37,11 @@ type Config struct {
 	Addr            string
 	OrchestratorURL string
 	RedisAddr       string
+	// EventsLogPath enables the append-only event journal: every stored
+	// event is written through to disk and replayed on startup, so a
+	// gateway restart no longer loses task history and the WS backlog.
+	// Empty disables persistence (unit tests).
+	EventsLogPath string
 }
 
 func LoadConfig() Config {
@@ -42,6 +49,7 @@ func LoadConfig() Config {
 		Addr:            envOr("GATEWAY_ADDR", ":8080"),
 		OrchestratorURL: envOr("ORCHESTRATOR_URL", "http://localhost:8000"),
 		RedisAddr:       envOr("REDIS_ADDR", "localhost:6379"),
+		EventsLogPath:   envOr("GATEWAY_EVENTS_LOG", "gateway-events.jsonl"),
 	}
 }
 
@@ -120,18 +128,23 @@ type Gateway struct {
 	hub          *Hub
 	upstream     *url.URL
 	proxy        http.Handler
-	taskEvents   map[string][]json.RawMessage // run_id -> events (fallback store)
+	taskEvents   map[string][]json.RawMessage // run_id -> events (memory + journal)
 	taskEventsMu sync.Mutex
 	latestRun    string // most recently active run (WS replay source)
+
+	eventsWriter *bufio.Writer // journal writer (nil = disabled)
+	eventsFile   *os.File
 }
 
 func NewGateway(config Config, proxy http.Handler) *Gateway {
-	return &Gateway{
+	g := &Gateway{
 		config:     config,
 		hub:        NewHub(),
 		proxy:      proxy,
 		taskEvents: make(map[string][]json.RawMessage),
 	}
+	g.openEventJournal()
+	return g
 }
 
 // maxStoredEvents caps one run's in-memory event history: the cockpit's
@@ -141,6 +154,120 @@ func NewGateway(config Config, proxy http.Handler) *Gateway {
 // cap sits above the largest observed real-run stream (~2k events at 4M
 // tokens) while still bounding memory.
 const maxStoredEvents = 2000
+
+// Journal bounds: rotate at startup when the on-disk log exceeds
+// maxJournalBytes (package var so tests can lower it), and replay only the
+// last maxReplayedRuns runs so a long-lived journal does not translate into
+// unbounded startup memory.
+var maxJournalBytes int64 = 50 << 20 // 50 MiB
+
+const maxReplayedRuns = 50
+
+// openEventJournal attaches the append-only event journal: replay history
+// from disk, then write through every stored event. Rotation (rename to
+// .old) keeps the live journal bounded; a disabled journal (empty path or
+// open failure) degrades to the previous in-memory-only behavior.
+func (g *Gateway) openEventJournal() {
+	if g.config.EventsLogPath == "" {
+		return
+	}
+	if info, err := os.Stat(g.config.EventsLogPath); err == nil && info.Size() > maxJournalBytes {
+		_ = os.Remove(g.config.EventsLogPath + ".old")
+		if err := os.Rename(g.config.EventsLogPath, g.config.EventsLogPath+".old"); err != nil {
+			log.Printf("gateway: event journal rotation failed (%v)", err)
+		}
+	}
+	file, err := os.OpenFile(g.config.EventsLogPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Printf("gateway: event journal disabled (%v)", err)
+		return
+	}
+	g.replayJournal(file)
+	g.eventsFile = file
+	g.eventsWriter = bufio.NewWriter(file)
+}
+
+// replayJournal rebuilds taskEvents/latestRun from the journal file. Events
+// without a run_id are skipped (they were broadcast-only in life). Per-run
+// and total-run caps mirror the live in-memory bounds.
+func (g *Gateway) replayJournal(file *os.File) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return
+	}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024) // run.start carries 2KB+ of issue text
+	var order []string
+	perRun := make(map[string][]json.RawMessage)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var probe struct {
+			RunID string `json:"run_id"`
+		}
+		if json.Unmarshal(line, &probe) != nil || probe.RunID == "" {
+			continue
+		}
+		if _, seen := perRun[probe.RunID]; !seen {
+			order = append(order, probe.RunID)
+		}
+		if len(perRun[probe.RunID]) < maxStoredEvents {
+			perRun[probe.RunID] = append(perRun[probe.RunID], json.RawMessage(append([]byte(nil), line...)))
+		}
+	}
+	if len(order) > maxReplayedRuns {
+		order = order[len(order)-maxReplayedRuns:]
+	}
+	for _, id := range order {
+		g.taskEvents[id] = perRun[id]
+	}
+	if len(order) > 0 {
+		g.latestRun = order[len(order)-1]
+		log.Printf("gateway: replayed %d run(s) from event journal", len(order))
+	}
+}
+
+// journalEvent writes one stored event through to disk (called under
+// taskEventsMu, same critical section as the in-memory append). The first
+// write failure disables the journal for the process lifetime: persistence
+// must never take the live cockpit down with it.
+func (g *Gateway) journalEvent(raw json.RawMessage) {
+	if g.eventsWriter == nil {
+		return
+	}
+	if _, err := g.eventsWriter.Write(append(raw, '\n')); err != nil {
+		g.disableJournal(fmt.Sprintf("write: %v", err))
+		return
+	}
+	if err := g.eventsWriter.Flush(); err != nil {
+		g.disableJournal(fmt.Sprintf("flush: %v", err))
+	}
+}
+
+func (g *Gateway) disableJournal(reason string) {
+	log.Printf("gateway: event journal disabled: %s", reason)
+	g.eventsWriter = nil
+	if g.eventsFile != nil {
+		_ = g.eventsFile.Close()
+		g.eventsFile = nil
+	}
+}
+
+// CloseEventJournal flushes and closes the journal (tests and graceful
+// shutdown; a no-op when disabled).
+func (g *Gateway) CloseEventJournal() {
+	g.taskEventsMu.Lock()
+	defer g.taskEventsMu.Unlock()
+	if g.eventsWriter != nil {
+		_ = g.eventsWriter.Flush()
+	}
+	g.eventsWriter = nil
+	if g.eventsFile != nil {
+		_ = g.eventsFile.Close()
+		g.eventsFile = nil
+	}
+}
 
 // Handler builds the full route table.
 func (g *Gateway) Handler() http.Handler {
@@ -228,6 +355,7 @@ func (g *Gateway) storeEvent(raw json.RawMessage) {
 		}
 		g.latestRun = probe.RunID
 	}
+	g.journalEvent(raw)
 	g.hub.Broadcast(raw)
 }
 

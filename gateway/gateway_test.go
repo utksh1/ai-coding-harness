@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -36,8 +37,16 @@ func fakeOrchestrator(t *testing.T, status int, body map[string]any) *httptest.S
 	}))
 }
 
+// testConfig is LoadConfig with the event journal disabled: unit tests
+// never touch the on-disk journal (or each other's state).
+func testConfig() Config {
+	c := LoadConfig()
+	c.EventsLogPath = ""
+	return c
+}
+
 func TestHealthEndpoint(t *testing.T) {
-	gateway := NewGateway(LoadConfig(), nil)
+	gateway := NewGateway(testConfig(), nil)
 	server := httptest.NewServer(gateway.Handler())
 	defer server.Close()
 
@@ -108,7 +117,7 @@ func TestCreateTaskIsAsyncAndRecords(t *testing.T) {
 }
 
 func TestCreateTaskRejectsEmptyIssue(t *testing.T) {
-	gateway := NewGateway(LoadConfig(), nil)
+	gateway := NewGateway(testConfig(), nil)
 	server := httptest.NewServer(gateway.Handler())
 	defer server.Close()
 
@@ -164,7 +173,7 @@ func TestCreateTaskForwardsDemoMode(t *testing.T) {
 }
 
 func TestUnknownTaskReturns404(t *testing.T) {
-	gateway := NewGateway(LoadConfig(), nil)
+	gateway := NewGateway(testConfig(), nil)
 	server := httptest.NewServer(gateway.Handler())
 	defer server.Close()
 
@@ -212,7 +221,7 @@ func TestHubBroadcastReachesClients(t *testing.T) {
 }
 
 func TestDashboardEndpoint(t *testing.T) {
-	gateway := NewGateway(LoadConfig(), nil)
+	gateway := NewGateway(testConfig(), nil)
 	server := httptest.NewServer(gateway.Handler())
 	defer server.Close()
 
@@ -227,7 +236,7 @@ func TestDashboardEndpoint(t *testing.T) {
 }
 
 func TestBroadcastEventEndpoint(t *testing.T) {
-	gateway := NewGateway(LoadConfig(), nil)
+	gateway := NewGateway(testConfig(), nil)
 	server := httptest.NewServer(gateway.Handler())
 	defer server.Close()
 
@@ -245,7 +254,7 @@ func TestBroadcastEventEndpoint(t *testing.T) {
 func TestBroadcastEventStoresHistoryByRunID(t *testing.T) {
 	// streamed events must be retrievable from GET /api/tasks/:id — the
 	// cockpit's history panel and the API contract both depend on it.
-	gateway := NewGateway(LoadConfig(), nil)
+	gateway := NewGateway(testConfig(), nil)
 	server := httptest.NewServer(gateway.Handler())
 	defer server.Close()
 
@@ -354,7 +363,7 @@ func TestWSConnectReplaysBacklog(t *testing.T) {
 	// the latest run's stored history on connect — otherwise the page starts
 	// blank and can never render the plan, tree, tokens, or verdict. Live
 	// events must continue seamlessly after the replay.
-	gateway := NewGateway(LoadConfig(), nil)
+	gateway := NewGateway(testConfig(), nil)
 	server := httptest.NewServer(gateway.Handler())
 	defer server.Close()
 
@@ -435,7 +444,7 @@ func TestEvidenceRouteProxiesToOrchestrator(t *testing.T) {
 }
 
 func TestStoreEventCapsHistory(t *testing.T) {
-	gateway := NewGateway(LoadConfig(), nil)
+	gateway := NewGateway(testConfig(), nil)
 	for i := 0; i < maxStoredEvents+50; i++ {
 		raw, _ := json.Marshal(map[string]any{"event": "tick", "run_id": "capped"})
 		gateway.storeEvent(raw)
@@ -449,7 +458,7 @@ func TestStoreEventCapsHistory(t *testing.T) {
 }
 
 func TestEventFixtureRoute(t *testing.T) {
-	gateway := NewGateway(LoadConfig(), nil)
+	gateway := NewGateway(testConfig(), nil)
 	server := httptest.NewServer(gateway.Handler())
 	defer server.Close()
 
@@ -476,5 +485,99 @@ func TestEventFixtureRoute(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("expected 404 for %s, got %d", bad, resp.StatusCode)
 		}
+	}
+}
+
+func TestEventJournalPersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	journal := dir + "/events.jsonl"
+
+	first := NewGateway(Config{EventsLogPath: journal}, nil)
+	first.storeEvent(json.RawMessage(`{"event": "run.start", "run_id": "r-1", "issue": "fix"}`))
+	first.storeEvent(json.RawMessage(`{"event": "agent.step", "run_id": "r-1", "agent": "impl-1"}`))
+	first.storeEvent(json.RawMessage(`{"event": "run.end", "run_id": "r-1", "success": true}`))
+	first.storeEvent(json.RawMessage(`{"event": "run.start", "run_id": "r-2", "issue": "other"}`))
+	first.CloseEventJournal()
+
+	second := NewGateway(Config{EventsLogPath: journal}, nil)
+	defer second.CloseEventJournal()
+	server := httptest.NewServer(second.Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/tasks/r-1")
+	if err != nil {
+		t.Fatalf("task request failed: %v", err)
+	}
+	defer response.Body.Close()
+	var body struct {
+		RunID  string            `json:"run_id"`
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if body.RunID != "r-1" || len(body.Events) != 3 {
+		t.Fatalf("replayed run r-1 = %d events (want 3), run_id %q", len(body.Events), body.RunID)
+	}
+
+	// latestRun restored: the WS backlog source is the newest run.
+	second.taskEventsMu.Lock()
+	latest := second.latestRun
+	second.taskEventsMu.Unlock()
+	if latest != "r-2" {
+		t.Fatalf("latestRun after replay = %q (want r-2)", latest)
+	}
+
+	// New events keep appending to the same journal (write-through).
+	second.storeEvent(json.RawMessage(`{"event": "agent.step", "run_id": "r-2"}`))
+	second.CloseEventJournal()
+
+	content, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	if got := strings.Count(string(content), "\n"); got != 5 {
+		t.Fatalf("journal lines = %d (want 5)", got)
+	}
+}
+
+func TestEventJournalRotation(t *testing.T) {
+	dir := t.TempDir()
+	journal := dir + "/events.jsonl"
+
+	prev := maxJournalBytes
+	maxJournalBytes = 64
+	defer func() { maxJournalBytes = prev }()
+
+	if err := os.WriteFile(journal, []byte(strings.Repeat("x", 128)+"\n"), 0o644); err != nil {
+		t.Fatalf("seed journal: %v", err)
+	}
+
+	g := NewGateway(Config{EventsLogPath: journal}, nil)
+	defer g.CloseEventJournal()
+
+	if _, err := os.Stat(journal + ".old"); err != nil {
+		t.Fatalf("rotated journal missing: %v", err)
+	}
+	g.taskEventsMu.Lock()
+	runs := len(g.taskEvents)
+	g.taskEventsMu.Unlock()
+	if runs != 0 {
+		t.Fatalf("oversized journal replayed %d runs (want 0 after rotation)", runs)
+	}
+}
+
+func TestEventJournalDisabledByEmptyPath(t *testing.T) {
+	g := NewGateway(Config{}, nil)
+	g.storeEvent(json.RawMessage(`{"event": "run.start", "run_id": "r-9"}`))
+	g.taskEventsMu.Lock()
+	writer := g.eventsWriter
+	runs := len(g.taskEvents)
+	g.taskEventsMu.Unlock()
+	if writer != nil {
+		t.Fatalf("journal writer should be nil with empty path")
+	}
+	if runs != 1 {
+		t.Fatalf("in-memory store should still work: %d runs", runs)
 	}
 }
