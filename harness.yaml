@@ -84,6 +84,9 @@ logging:
   file_path: .harness/harness.log
 
 run:
-  wall_clock_seconds: 1800
+  # Rate-limited backends (throttled shim, 429 walls) need wall-clock
+  # headroom: measured ~20-30 productive model calls per 10 min under
+  # throttling, a full run needs 100+ calls.
+  wall_clock_seconds: 3600
   max_steps: 60
   results_dir: results
