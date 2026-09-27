@@ -1571,6 +1571,23 @@ function dispatch(ev) {
       renderTree(); renderAgentTab();
       break;
 
+    case 'task.completed': {
+      // the gateway's async /api/tasks wrapper answers 202 immediately and
+      // records the orchestrator's final response here — success, outcome,
+      // flags, evidence pointer. Surface it in the launcher panel so the
+      // run's verdict is visible without polling anything.
+      var done = ev.result || {};
+      var okDone = done.success !== false;
+      showLaunchResult(
+        okDone,
+        okDone ? (done.outcome || 'Run finished') : 'Run failed',
+        (Array.isArray(done.flags) ? done.flags.join(' · ') : (done.error || '')),
+        ev.run_id || done.run_id
+      );
+      renderMeta();
+      break;
+    }
+
     case 'run.end': {
       S.runEndTs = ev._ts;
       var okEnd = ev.success !== false;
@@ -1821,15 +1838,24 @@ function launchTask() {
         showLaunchResult(false, 'Launch failed', detail);
         return;
       }
+      var runId = body.run_id || (body.result || {}).run_id;
+      if (body.status === 'accepted' || !body.result) {
+        // 202: the gateway accepted the run and proxies /agent/run in the
+        // background (real runs take minutes). Live progress streams on /ws;
+        // the final result lands here via the task.completed event.
+        if (runId) { S.runId = runId; renderTopbar(); }
+        showLaunchResult(true, 'Run started', 'streaming live events — the final result will appear here', runId);
+        return;
+      }
       var result = body.result || {};
       showLaunchResult(
         result.success !== false,
         result.outcome || 'Run finished',
         (Array.isArray(result.flags) ? result.flags.join(' · ') : ''),
-        body.run_id || result.run_id
+        runId
       );
-      if (body.run_id || result.run_id) {
-        S.runId = body.run_id || result.run_id;
+      if (runId) {
+        S.runId = runId;
         renderTopbar();
         loadDiff();
       }

@@ -138,6 +138,18 @@ The six stages in order: `1-integrity, 2-self-check, 3-local-tests,
 ## Transport notes
 
 - Gateway WS frames are the raw event objects (same shapes as above).
+- **Backlog replay on connect**: a client connecting to `/ws` first receives
+  the stored history of the latest run (up to the 2000-event cap), then live
+  events. `run.start` resets cockpit state, so a whole-run replay is
+  idempotent — a cockpit opened or refreshed mid-run (or after a run)
+  renders the full picture: roster, plan, tree, tokens, gates, verdict.
+- **Async task creation**: `POST /api/tasks` answers `202 Accepted` with
+  `{"run_id", "status": "accepted"}` immediately; the orchestrator's
+  `/agent/run` is proxied in a detached background context (a client
+  disconnect can no longer sever a live run). The final orchestrator
+  response is recorded and broadcast as a `task.completed` event:
+  `{"event": "task.completed", "run_id", "result": {"success", "outcome",
+  "evidence_path", "flags", ...}}`.
 - Event history per run is capped (2000) and served by `GET /api/tasks/{run_id}`.
 - The offline fixture `gateway/web/events.sample.jsonl` follows this contract
   exactly; both cockpits implement a replay mode against it.
