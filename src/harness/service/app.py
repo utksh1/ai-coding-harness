@@ -161,6 +161,14 @@ def create_app(
 
     pipelines: dict[str, HarnessPipeline] = {}
     run_roots: dict[str, str] = _load_run_roots()
+    # One pipeline run per repo at a time: the gateway retries /agent/run
+    # after transport hiccups, and a retried POST landing while the original
+    # run still lives would spawn a SECOND pipeline on the SAME working tree
+    # (interleaved edits, no-op apply_edit errors, racing test runs - live
+    # finding from the ec64a196/97ab7e14 collision). In-process only: an
+    # orchestrator restart clears it with the dying run, which is exactly
+    # when retries SHOULD be allowed.
+    active_repo_runs: dict[str, str] = {}
 
     def _pipeline(
         repo_root: str, event_sink: Any = None, demo: bool | None = None
@@ -304,6 +312,34 @@ def create_app(
         run_id = request.run_id or uuid.uuid4().hex[:12]
         if not _safe_run_id(run_id):
             return {"success": False, "error": "invalid run_id", "outcome": "FAILED"}
+        busy_run = active_repo_runs.get(request.repo_root)
+        if busy_run is not None:
+            # Synchronous check-and-set (no await between): concurrent POSTs
+            # serialize on the event loop, so the first one wins the repo.
+            reason = (
+                f"run {busy_run} already active in this repo"
+                if busy_run == run_id
+                else f"repo busy: run {busy_run} active"
+            )
+            logger.warning("run rejected: repo busy", run_id=run_id, busy_run=busy_run)
+            publisher.publish(
+                run_id,
+                {
+                    "event": "run.failed",
+                    "run_id": run_id,
+                    "error": f"REJECTED: {reason}",
+                    "stage": "admission",
+                },
+            )
+            publisher.publish(run_id, {"event": "run.end", "run_id": run_id, "success": False})
+            return {
+                "run_id": run_id,
+                "success": False,
+                "outcome": f"REJECTED: {reason}",
+                "evidence_path": "",
+                "flags": ["concurrent run rejected"],
+            }
+        active_repo_runs[request.repo_root] = run_id
         _remember_run_root(run_roots, run_id, request.repo_root)
         _save_run_roots(run_roots)
         pipeline = _pipeline(
@@ -342,6 +378,9 @@ def create_app(
                 "evidence_path": "",
                 "flags": [f"transport error: {type(exc).__name__}"],
             }
+        finally:
+            if active_repo_runs.get(request.repo_root) == run_id:
+                active_repo_runs.pop(request.repo_root, None)
         return {
             "run_id": outcome.run_id,
             "success": outcome.success,

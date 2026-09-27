@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -142,6 +145,74 @@ def test_run_endpoint_rejects_unsafe_run_id(demo_repo: Path, fake_model_config) 
     )
     body = response.json()
     assert body["success"] is False and "invalid run_id" in body["error"]
+
+
+def test_run_endpoint_rejects_concurrent_run_same_repo(demo_repo: Path, fake_model_config) -> None:
+    """One pipeline run per repo: a retried POST must not spawn a colliding run.
+
+    Live finding (ec64a196/97ab7e14): the gateway retries /agent/run after
+    transport hiccups; a retry landing while the original run still lives
+    started a SECOND pipeline on the same working tree (interleaved edits,
+    no-op apply_edit errors, racing test runs).
+    """
+    from harness.infrastructure.model_providers import FakeProvider, ModelResponse
+
+    script = [
+        ModelResponse(content=PROFILE),
+        ModelResponse(content=PLAN),
+        ModelResponse(content="TASK_COMPLETE: done"),
+        ModelResponse(content=VERDICT),
+    ]
+
+    class GatedProvider(FakeProvider):
+        """Holds the first model call so a second POST overlaps the run."""
+
+        def __init__(self, cfg) -> None:
+            super().__init__(cfg, responses=script * 3)
+            self._gated = False
+
+        async def generate(self, messages, tools=None):  # type: ignore[no-untyped-def]
+            if not self._gated:
+                self._gated = True
+                await asyncio.sleep(0.5)
+            return await super().generate(messages, tools)
+
+    app = create_app(config=_service_config(), provider=GatedProvider(fake_model_config))
+    client = TestClient(app)
+    repo = str(demo_repo / "target")
+
+    first: dict = {}
+
+    def launch_first() -> None:
+        first["body"] = client.post(
+            "/agent/run", json={"issue": "a", "repo_root": repo, "run_id": "run-A"}
+        ).json()
+
+    thread = threading.Thread(target=launch_first)
+    thread.start()
+    time.sleep(0.2)  # run-A is inside pipeline.run, holding the repo lock
+
+    duplicate = client.post(
+        "/agent/run", json={"issue": "b", "repo_root": repo, "run_id": "run-B"}
+    ).json()
+    assert duplicate["success"] is False
+    assert "repo busy" in duplicate["outcome"]
+    assert "run-A" in duplicate["outcome"]
+
+    retried_same_id = client.post(
+        "/agent/run", json={"issue": "b", "repo_root": repo, "run_id": "run-A"}
+    ).json()
+    assert retried_same_id["success"] is False
+    assert "already active" in retried_same_id["outcome"]
+
+    thread.join(timeout=30)
+    assert first["body"]["success"] is True, "the original run must be unaffected"
+
+    # Lock released after completion: a fresh run on the same repo is admitted.
+    third = client.post(
+        "/agent/run", json={"issue": "c", "repo_root": repo, "run_id": "run-C"}
+    ).json()
+    assert third["success"] is True
 
 
 def test_evidence_files_endpoint(demo_repo: Path, fake_model_config) -> None:
