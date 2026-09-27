@@ -17,13 +17,14 @@ eval time), Docker sandboxing (subprocess limits instead), web dashboard
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from harness.agents.architect import ArchitectAgent, Plan, SubTask
+from harness.agents.architect import ArchitectAgent, Plan, RepositoryProfile, SubTask
 from harness.agents.llm_agent import StoreWindow
 from harness.agents.manager import (
     ManagerAgent,
@@ -38,6 +39,7 @@ from harness.config import HarnessConfig
 from harness.engine.budget import BudgetGovernor
 from harness.engine.evidence import EvidencePack, build_summary
 from harness.engine.recovery import Executor, RecoveryLadder, Rerouter
+from harness.infrastructure.model_providers import ModelAuthError
 from harness.monitoring.metrics import MetricsCollector
 from harness.security.audit import AuditLog
 from harness.security.input_guard import detect_prompt_injection
@@ -212,12 +214,11 @@ class HarnessPipeline:
         if architect is None:
             return self._no_architect_outcome(run_id, pack)
         metrics.stage_started("architect")
-        profile = await architect.analyze_repository(summarize_repository(self._repo_root))
+        profile, plan = await self._architect_stage_with_retry(architect, issue_text, run_id, pack)
+        metrics.stage_finished("architect")
         pack.trace(
             {"event": "architect.profile", "run_id": run_id, "profile": profile.model_dump()}
         )
-        plan = await architect.decompose(issue_text, profile)
-        metrics.stage_finished("architect")
         pack.trace(
             {
                 "event": "architect.plan",
@@ -503,6 +504,58 @@ class HarnessPipeline:
             return proc.stdout
         except (OSError, subprocess.TimeoutExpired):  # pragma: no cover - git is probed
             return ""
+
+    ARCHITECT_STAGE_ATTEMPTS = 3
+    ARCHITECT_STAGE_BACKOFF_SECONDS = 20.0
+
+    async def _architect_stage_with_retry(
+        self, architect: ArchitectAgent, issue_text: str, run_id: str, pack: EvidencePack
+    ) -> tuple[RepositoryProfile, Plan]:
+        """Analyze + decompose with bounded stage-level retries.
+
+        The recovery ladder covers specialist TASKS, but the architect's two
+        structured calls happen before any task exists - a flapping provider
+        pool (live finding: HTTP 503 for the first ~3 minutes of a run) used
+        to kill the whole run at t=0. Transport-class failures now retry the
+        stage with backoff (each attempt is a full provider retry ladder);
+        auth errors propagate immediately - credentials never heal.
+        """
+        window = architect.context_window
+        planning_task = window.task_id if isinstance(window, StoreWindow) else "planning"
+        last_error: RuntimeError | TimeoutError | ConnectionError | None = None
+        for attempt in range(1, self.ARCHITECT_STAGE_ATTEMPTS + 1):
+            try:
+                profile = await architect.analyze_repository(
+                    summarize_repository(self._repo_root)
+                )
+                plan = await architect.decompose(issue_text, profile)
+                return profile, plan
+            except ModelAuthError:
+                raise
+            except (RuntimeError, TimeoutError, ConnectionError) as exc:
+                last_error = exc
+                if attempt >= self.ARCHITECT_STAGE_ATTEMPTS:
+                    break
+                pack.trace(
+                    {
+                        "event": "architect.retry",
+                        "run_id": run_id,
+                        "attempt": attempt,
+                        "error": str(exc)[:200],
+                    }
+                )
+                # Drop the half-built planning window so the retry starts
+                # clean instead of replaying a failed turn.
+                self._store.clear_window(architect.agent_id, planning_task)
+                architect.context_window = StoreWindow(
+                    self._store,
+                    architect.agent_id,
+                    planning_task,
+                    stale_tool_results=architect.stale_tool_results,
+                )
+                await asyncio.sleep(self.ARCHITECT_STAGE_BACKOFF_SECONDS * attempt)
+        assert last_error is not None  # the loop only exits via failure
+        raise last_error
 
     def _no_architect_outcome(self, run_id: str, pack: EvidencePack) -> PipelineOutcome:
         pack.summary(
