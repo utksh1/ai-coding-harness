@@ -40,9 +40,36 @@ docker compose -f platform/docker-compose.yml up --build   # redis + orchestrato
 - **Orchestrator** (`harness[platform]` extra, port 8000): FastAPI service exposing
   `/agent/architect/{analyze,decompose}`, `/agent/manager/assign`,
   `/agent/specialist/execute`, `/agent/run`, `/agent/status/:id`
-- **Gateway** (Go, port 8080): task creation proxy, `/api/tasks/:id`, `/api/metrics`,
-  `/ws` WebSocket fed by the Redis pub/sub event bus (`harness.events.<run_id>`)
-- **Go TUI**: Bubble Tea dashboard over the gateway's WebSocket (P4 #73 — in flight)
+- **Gateway** (Go, port 8080): async task creation (202 + run_id), `/api/tasks/:id`
+  with full stored event history, `/api/agents`, `/api/evidence/{run}/file/{name}`,
+  `/ws` WebSocket with backlog replay (a mid-run refresh re-renders the whole run)
+
+**The cockpits** (the operator's window into a live run — both consume the
+[Cockpit Event Contract v2](docs/cockpit-events.md)):
+
+- **Go TUI** (`make tui-go`): the org-tree cockpit — L1 architect → L2 manager →
+  L3 specialists → L4 collaborators with status lights, per-agent token meters,
+  step counters and live activity; tabs for the plan board, per-agent tool-call
+  log, activity feed, six verification gates and the final diff. Offline replay:
+  `go run ./cmd/tui --replay web/events.sample-collab.jsonl`
+- **Web cockpit** (`http://localhost:8080/`): the same hierarchy in the browser —
+  kanban plan board, delegation routing breakdown (40/20/20/20), tool-call log,
+  timeline with auto-scroll, gate stepper, diff viewer, launcher.
+  Offline replay: `http://localhost:8080/?replay=events.luna-run.jsonl`
+
+**Engine quality loops** (what keeps a flailing model on course — live-run
+findings, each backed by tests):
+
+- **Loop coaching**: repeated identical tool-call failures inject the correct
+  usage contract; step-budget warnings at 70%/90%; edits not followed by a test
+  run get a verify nudge; identical failing calls are deduped.
+- **Self-recovering `apply_edit`**: a failed search/replace returns the closest
+  actual file region (line-numbered) so the model corrects itself in one
+  round-trip instead of read → guess → fail loops.
+- **Architect-stage resilience**: transient provider outages at t=0 are retried
+  with backoff (`architect.retry` events); auth errors fail fast.
+- **Recovery ladder**: L1 self-repair (3×) → L2 manager guidance / re-route /
+  collaborator spawn → L3 architect re-plan → honest `NOT VERIFIED` with evidence.
 
 Never imported by the graded core: `make setup/run/test` stay exactly as evaluated.
 
