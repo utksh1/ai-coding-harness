@@ -38,4 +38,5 @@
 {"event": "verification.stage", "run_id": "f7e6d5c4b3a2", "stage": "5-security", "passed": true, "blocking": true, "detail": "skipped after blocking failure", "duration_seconds": 0.0}
 {"event": "verification.stage", "run_id": "f7e6d5c4b3a2", "stage": "6-final-review", "passed": true, "blocking": true, "detail": "skipped after blocking failure", "duration_seconds": 0.0}
 {"event": "tokens.usage", "run_id": "f7e6d5c4b3a2", "phase": "verification", "governor_mode": "NORMAL", "usage": {"prompt_tokens": 78200, "completion_tokens": 6400, "total_tokens": 84600}}
-{"event": "run.end", "run_id": "f7e6d5c4b3a2", "success": false, "outcome": "NOT VERIFIED: see test-report.md and task failures"}
+{"event": "budget.exhausted", "run_id": "f7e6d5c4b3a2", "reason": "wall clock exceeded: 1800s >= 1800s limit"}
+{"event": "run.end", "run_id": "f7e6d5c4b3a2", "success": false, "outcome": "NOT VERIFIED: run stopped by budget governor - wall clock exceeded: 1800s >= 1800s limit", "stop_reason": "wall clock exceeded: 1800s >= 1800s limit"}
