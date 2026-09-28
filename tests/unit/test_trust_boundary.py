@@ -27,11 +27,11 @@ class EchoTool(Tool):
 
     name, tier = "echo_tool", ToolTier.BASIC
     description = "echo"
-    parameters: dict[str, Any] = {
+    parameters: dict[str, Any] = {  # noqa: RUF012 - Tool contract
         "type": "object",
         "properties": {"text": {"type": "string"}},
         "required": ["text"],
-    }  # noqa: RUF012 - matches the Tool contract used across the suite
+    }
 
     def validate_input(self, arguments: dict[str, Any]) -> list[str]:
         return []

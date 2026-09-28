@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-from typing import Any
 
 ENV_ALLOWLIST = frozenset(
     {
@@ -124,20 +123,3 @@ def network_egress_violation(argv: list[str], allow_network: bool = False) -> st
                 if os.path.basename(arg) in subcommands:
                     return f"{head} {arg} requires network access (disabled)"
     return None
-
-
-def describe(argv: list[str] | None) -> dict[str, Any]:
-    """Cockpit-facing summary of one sandboxed command (never env values)."""
-    return {
-        "argv": list(argv or [])[:12],
-        "env_policy": "allowlist+dead-proxy" if not _network_allowed() else "allowlist",
-    }
-
-
-def _network_allowed() -> bool:
-    from harness.config import load_config
-
-    try:
-        return bool(load_config().tools.allow_network_commands)
-    except Exception:  # pragma: no cover - config damage defaults closed
-        return False
