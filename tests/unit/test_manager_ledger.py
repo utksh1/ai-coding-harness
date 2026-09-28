@@ -358,9 +358,22 @@ async def test_reroute_without_alternatives_returns_none(work_repo: Path) -> Non
 
 
 def test_service_provider_factory_branches() -> None:
-    from harness.infrastructure.model_providers import create_model_provider as real_builder
-    from harness.infrastructure.model_providers.fake import build_demo_provider
     from harness.service.app import _service_provider_factory
 
-    assert _service_provider_factory(True) is build_demo_provider
-    assert _service_provider_factory(False) is real_builder
+    demo_factory = _service_provider_factory(True)
+    real_factory = _service_provider_factory(False)
+
+    # Demo leg: role-aware scripted providers.
+    demo_arch = demo_factory(object(), role="architect")
+    assert len(demo_arch._responses) == 3
+    # Real leg: delegates to create_model_provider (mocked for identity).
+
+    sentinel = object()
+    import harness.service.app as app_module
+
+    original = app_module.create_model_provider
+    app_module.create_model_provider = lambda cfg: sentinel
+    try:
+        assert real_factory(object(), role="implementer", agent_id="impl-1") is sentinel
+    finally:
+        app_module.create_model_provider = original

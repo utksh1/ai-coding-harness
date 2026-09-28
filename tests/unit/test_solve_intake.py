@@ -182,8 +182,12 @@ def test_main_solve_dispatch(demo_repo: Path, monkeypatch) -> None:
 def test_demo_provider_is_labeled(fake_model_config) -> None:
     from harness.infrastructure.model_providers.fake import build_demo_provider
 
-    provider = build_demo_provider(fake_model_config)
-    assert len(provider._responses) == 5  # profile, plan, write tool call, specialist, verdict
+    # Role-aware per-agent scripts (parallel-wave prerequisite): the default
+    # (no role) script is the specialist leg; architect/implementer legs are
+    # separate. The old single 5-response script is gone with it.
+    assert len(build_demo_provider(fake_model_config)._responses) == 1
+    assert len(build_demo_provider(fake_model_config, role="architect")._responses) == 3
+    assert len(build_demo_provider(fake_model_config, role="implementer")._responses) == 2
 
 
 async def test_demo_provider_tails_the_verdict_on_extra_calls(fake_model_config) -> None:
@@ -195,11 +199,11 @@ async def test_demo_provider_tails_the_verdict_on_extra_calls(fake_model_config)
 
     from harness.infrastructure.model_providers.fake import build_demo_provider
 
-    provider = build_demo_provider(fake_model_config)
-    # consume the whole script: profile, plan, specialist, verdict
-    for _ in range(4):
+    provider = build_demo_provider(fake_model_config, role="architect")
+    # consume the whole architect script: profile, plan, verdict
+    for _ in range(3):
         await provider.generate([{"role": "user", "content": "go"}])
-    # extra chunks: verdict, verdict, verdict...
+    # extra chunks (diff beyond chunk budget): verdict, verdict, verdict...
     for _ in range(3):
         extra = await provider.generate([{"role": "user", "content": "chunk"}])
         parsed = json.loads(extra.content)

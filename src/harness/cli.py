@@ -138,13 +138,16 @@ def solve_command(args: argparse.Namespace) -> int:
             )
             return 3
 
-    def _provider_factory(model_cfg: Any) -> Any:
-        """One provider per models-profile: per-agent model bindings from
-        harness.yaml (architect vs specialists) are honored by the CLI too."""
+    def _provider_factory(
+        model_cfg: Any, role: str | None = None, agent_id: str | None = None
+    ) -> Any:
+        """One provider instance per agent: per-agent model bindings from
+        harness.yaml (architect vs specialists) are honored by the CLI, and
+        the demo script is role-aware (each agent gets its scripted leg)."""
         if demo_mode:
             from harness.infrastructure.model_providers.fake import build_demo_provider
 
-            return build_demo_provider(model_cfg)
+            return build_demo_provider(model_cfg, role=role)
         return create_model_provider(model_cfg)
 
     store = create_context_store(config.storage)

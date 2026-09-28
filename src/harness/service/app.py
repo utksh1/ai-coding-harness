@@ -196,14 +196,23 @@ def _remember_run_root(
 
 
 def _service_provider_factory(effective_demo: bool) -> Any:
-    """Provider factory for the service path: one provider per models-profile
-    (per-agent model binding - architect on one profile, specialists on
-    another - is resolved by the pipeline, not collapsed here)."""
+    """Provider factory for the service path: one provider instance per
+    agent (per-agent model binding - architect on one profile, specialists
+    on another - is resolved by the pipeline, not collapsed here). The demo
+    leg is role-aware: each agent's scripted part matches its calls."""
+
     if effective_demo:
         from harness.infrastructure.model_providers.fake import build_demo_provider
 
-        return build_demo_provider
-    return create_model_provider
+        def _demo_factory(model_cfg: Any, role: str | None = None, agent_id: str | None = None) -> Any:
+            return build_demo_provider(model_cfg, role=role)
+
+        return _demo_factory
+
+    def _real_factory(model_cfg: Any, role: str | None = None, agent_id: str | None = None) -> Any:
+        return create_model_provider(model_cfg)
+
+    return _real_factory
 
 
 def _architect_of(pipeline: HarnessPipeline) -> Any:

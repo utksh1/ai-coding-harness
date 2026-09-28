@@ -28,6 +28,7 @@ from typing import Any
 from harness.agents.architect import ArchitectAgent, Plan, RepositoryProfile, SubTask
 from harness.agents.llm_agent import StoreWindow
 from harness.agents.manager import (
+    COLLABORATION_THRESHOLD,
     ManagerAgent,
     SpecialistSlot,
     assign_specialists,
@@ -94,21 +95,25 @@ class HarnessPipeline:
         self._audit = audit or AuditLog(self._repo_root / ".harness" / "audit.jsonl")
         self._event_sink = event_sink
         # Per-agent model binding (review finding #6): `agents[].model` names
-        # a `models:` profile and each agent gets the provider built FROM that
- # profile - multi-model orchestration is real, not aspirational. An
+        # a `models:` profile and each agent gets a provider built FROM that
+        # profile - multi-model orchestration is real, not aspirational. An
         # explicitly injected `provider` (tests, demo) overrides every binding;
-        # `provider_factory` builds (and caches) one provider per profile.
+        # `provider_factory` builds one provider instance PER AGENT (parallel
+        # waves need providers that share no state).
         self._model_profile = (
             model_profile if model_profile in config.models else "default"
         )
         # An injected provider (tests, demo) overrides every binding: any
         # supplied factory is ignored so the injection is never bypassed.
         self._provider_factory = provider_factory if provider is None else None
-        self._providers: dict[str, Any] = {}
         self._provider = (
             provider
             if provider is not None
-            else (self._provider_for(self._model_profile) if provider_factory is not None else None)
+            else (
+                self._provider_for(self._model_profile, role="architect", agent_id="pipeline")
+                if provider_factory is not None
+                else None
+            )
         )
         self._tools = build_default_tools(self._repo_root)
         self._agents: dict[str, Any] = {}
@@ -130,15 +135,19 @@ class HarnessPipeline:
             return agent_model
         return self._model_profile if self._model_profile in self._config.models else "default"
 
-    def _provider_for(self, profile: str) -> Any:
-        """One cached provider per distinct profile (shared instances for
-        agents on the same profile; no factory -> the injected provider)."""
+    def _provider_for(self, profile: str, role: str | None = None, agent_id: str | None = None) -> Any:
+        """One provider instance per AGENT (review finding #11 prerequisite).
+
+        Real providers are stateless, so per-agent instances cost nothing and
+        buy the parallel wave: two agents sharing one provider OBJECT would
+        interleave state (scripted test providers) or serialize on shared
+        clients. The factory receives the role/agent-id (role-aware demo
+        scripts, per-agent telemetry). Per profile resolution still applies
+        (unknown -> default); an injected provider collapses everyone."""
         name = profile if profile in self._config.models else "default"
-        if name not in self._providers:
-            if self._provider_factory is None:
-                return self._provider
-            self._providers[name] = self._provider_factory(self._config.models[name])
-        return self._providers[name]
+        if self._provider_factory is None:
+            return self._provider
+        return self._provider_factory(self._config.models[name], role=role, agent_id=agent_id)
 
     def _build_agents(self) -> None:
         slots: list[SpecialistSlot] = []
@@ -152,7 +161,9 @@ class HarnessPipeline:
                 "model": profile_cfg.name,
                 "profile": profile,
             }
-            agent_provider = self._provider_for(profile)
+            agent_provider = self._provider_for(
+                profile, role=agent_config.role, agent_id=agent_config.agent_id
+            )
             if agent_config.role == "architect":
                 self._architect = ArchitectAgent(
                     agent_id=agent_config.agent_id,
@@ -418,23 +429,25 @@ class HarnessPipeline:
         architect: ArchitectAgent,
         batch_no: int = 1,
     ) -> list[TaskResult]:
-        """Execute one file-disjoint batch.
+        """Execute one file-disjoint batch as a PARALLEL WAVE (finding #11).
 
-        Batch members route through the Manager's LIVE ledger (review
-        finding #7): current_tasks/tokens_used update per task, team-average
-        load feeds §5.1 scoring, and L2 reassign picks the best-scoring
-        OTHER specialist instead of dict order (finding #8). Execution order
-        within a batch stays serial until per-agent provider isolation
-        lands (parallel wave, finding #11).
+        Wave planning routes each batch member to a DISTINCT agent (the
+        ranked top slot not yet claimed): file-disjoint members + distinct
+        agents + distinct provider instances -> asyncio.gather. Members that
+        cannot get their own agent (roster too small, shared injected
+        provider) run serially after the wave - honest degradation, never a
+        silent race on one agent's stateful loop.
         """
-        results: list[TaskResult] = []
 
-        async def run_one(subtask: SubTask) -> TaskResult:
+        async def run_one(subtask: SubTask, planned_agent: str | None = None) -> TaskResult:
             task = subtask.to_task()
+            # Full ranking first: the top-3 list drives planned collaboration
+            # even when the wave planner pinned this member's executor.
             chosen = assign_specialists(
                 task, self._specialist_slots, team_average_tokens=self._team_average()
             )
-            agent_id = chosen[0] if chosen else next(iter(self._agents))
+            agent_id = planned_agent or (chosen[0] if chosen else next(iter(self._agents)))
+            chosen = chosen or [agent_id]
             agent = self._agents[agent_id]
             slot = next(
                 (s for s in self._specialist_slots if s.agent_id == agent_id),
@@ -510,11 +523,150 @@ class HarnessPipeline:
                     "tokens": getattr(executor, "traced_tokens", 0),
                 }
             )
+            # Planned collaboration (finding #9): a high-complexity task's
+            # top-3 routing is REAL - the runner-up agents execute a
+            # review-and-fix pass over the primary's completed work. Their
+            # edits land in the tree; the gates judge the union.
+            if result.success and len(chosen) > 1 and task.complexity > COLLABORATION_THRESHOLD:
+                await self._planned_collaboration(
+                    task, chosen[1:], executor, governor, pack, run_id, metrics
+                )
             return result
 
-        for subtask in batch:
+        wave, overflow = self._plan_wave(batch)
+        results: list[TaskResult] = []
+        if len(wave) >= 2 and self._wave_parallel_safe(wave):
+            # True fan-out: file-disjoint members on distinct agents with
+            # state-independent providers. Exceptions complete the wave
+            # (return_exceptions), then the first real one propagates so the
+            # caller's BudgetExhausted handling stays exact.
+            outcomes = await asyncio.gather(
+                *(run_one(subtask, agent_id) for subtask, agent_id in wave),
+                return_exceptions=True,
+            )
+            first_error: BaseException | None = None
+            for outcome in outcomes:
+                if isinstance(outcome, BaseException):
+                    if first_error is None and not isinstance(outcome, asyncio.CancelledError):
+                        first_error = outcome
+                else:
+                    results.append(outcome)
+            if first_error is not None:
+                raise first_error
+        else:
+            for subtask, agent_id in wave:
+                results.append(await run_one(subtask, agent_id))
+        for subtask in overflow:
             results.append(await run_one(subtask))
         return results
+
+    def _plan_wave(self, batch: list[SubTask]) -> tuple[list[tuple[SubTask, str]], list[SubTask]]:
+        """Claim distinct agents for batch members, ranked per task.
+
+        Members beyond the distinct-agent budget land in `overflow` and run
+        serially (the best slot may then be busy - the Manager's live
+        availability scoring routes them to the next free specialist)."""
+        claimed: set[str] = set()
+        wave: list[tuple[SubTask, str]] = []
+        overflow: list[SubTask] = []
+        for subtask in batch:
+            task = subtask.to_task()
+            available = [
+                slot
+                for slot in self._specialist_slots
+                if slot.agent_id not in claimed and slot.agent_id not in self._coordination_ids
+            ]
+            ranked = rank_specialists(task, available, team_average_tokens=self._team_average())
+            if ranked:
+                agent_id = ranked[0][0].agent_id
+                claimed.add(agent_id)
+                wave.append((subtask, agent_id))
+            else:
+                overflow.append(subtask)
+        return wave, overflow
+
+    def _wave_parallel_safe(self, wave: list[tuple[SubTask, str]]) -> bool:
+        """Parallel requires state-independent providers: an injected shared
+        provider (tests, demo) would interleave scripted responses across
+        concurrent agents - those waves run serially instead."""
+        providers = [self._agents.get(agent_id) for _, agent_id in wave]
+        if any(agent is None for agent in providers):
+            return False
+        identities = {id(agent.provider) for agent in providers if agent is not None}
+        return len(identities) == len(wave)
+
+    async def _planned_collaboration(
+        self,
+        task: Task,
+        runner_ups: list[str],
+        primary: Any,
+        governor: BudgetGovernor,
+        pack: EvidencePack,
+        run_id: str,
+        metrics: MetricsCollector,
+    ) -> None:
+        """Top-3 collaboration made real (finding #9): runner-up agents from
+        the routing review-and-fix the primary's completed work.
+
+        Advisory by design: a collaborator's failure never flips the task's
+        success (the primary completed it; the gates judge the union diff),
+        but its edits are real and its outcome is evented + metered."""
+        primary_id = getattr(primary, "agent_id", "primary")
+        for runner_up in runner_ups[:2]:
+            collaborator = self._agents.get(runner_up)
+            if collaborator is None or runner_up == primary_id:
+                continue
+            review_task = task.model_copy(
+                update={
+                    "description": (
+                        f"REVIEW PASS (collaboration): the primary agent "
+                        f"({primary_id}) completed this task. Review the "
+                        "current working-tree changes against the acceptance "
+                        "criteria and FIX any defects you find. Do not redo "
+                        "completed work.\n\nOriginal task: "
+                        f"{task.description}"
+                    ),
+                    "metadata": {**task.metadata, "collaboration": "review", "for": primary_id},
+                }
+            )
+            if self._manager is not None and hasattr(self._manager, "assign_task"):
+                with contextlib.suppress(ValueError):
+                    await self._manager.assign_task(review_task, runner_up)
+            pack.trace(
+                {
+                    "event": "specialist.collaborator_added",
+                    "run_id": run_id,
+                    "agent": runner_up,
+                    "for": primary_id,
+                    "role": "collaborator",
+                    "reason": "planned",
+                }
+            )
+            collaborator.governor = governor
+            collaborator.attach_tracer(pack.trace, run_id)
+            collab_result = await collaborator.execute_task(review_task)
+            metrics.record_result(collab_result, agent_id=runner_up)
+            if self._manager is not None and hasattr(self._manager, "acknowledge_completion"):
+                await self._manager.acknowledge_completion(
+                    review_task.id,
+                    runner_up,
+                    tokens_used=max(0, getattr(collaborator, "traced_tokens", 0)),
+                    success=collab_result.success,
+                )
+            pack.trace(
+                {
+                    "event": "specialist.result",
+                    "run_id": run_id,
+                    "task": review_task.id,
+                    "agent": runner_up,
+                    "role": "collaborator",
+                    "success": collab_result.success,
+                    "summary": collab_result.summary[:400],
+                    "advisory": True,
+                    "steps": getattr(collaborator, "steps_used", 0),
+                    "tokens": getattr(collaborator, "traced_tokens", 0),
+                }
+            )
 
     def _team_average(self) -> int:
         """Live mean token spend across specialists: the load factor must
@@ -583,7 +735,7 @@ class HarnessPipeline:
                 "model": profile_cfg.name,
                 "profile": primary_profile,
             },
-            provider=self._provider_for(primary_profile),
+            provider=self._provider_for(primary_profile, role="implementer", agent_id=agent_id),
             store=self._store,
             governor=self._placeholder_governor,
             tools=self._tools,

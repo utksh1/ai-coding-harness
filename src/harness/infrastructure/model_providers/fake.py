@@ -94,88 +94,97 @@ class FakeProvider(ModelProvider):
         return item
 
 
-def build_demo_provider(config: Any) -> FakeProvider:
+def build_demo_provider(config: Any, role: str | None = None) -> FakeProvider:
     """Credential-free demo: a canned end-to-end script for any issue.
 
-    The script performs a REAL edit (filesystem_write of demo_output.py) so
-    the run carries an actual diff - the no-op gate would (correctly) fail
-    a demo that only claims completion in prose. The pipeline labels the
-    resulting evidence DEMO; never use during evaluation - this exists so
-    judges can see the full flow offline.
+    ROLE-AWARE (per-agent provider instances): the architect instance gets
+    the [profile, plan, verdict] leg, the implementer instance gets the
+    [real edit, completion] leg, everything else idles. The script performs
+    a REAL edit (filesystem_write of demo_output.py) so the run carries an
+    actual diff - the no-op gate would (correctly) fail a demo that only
+    claims completion in prose. The pipeline labels the resulting evidence
+    DEMO; never use during evaluation - this exists so judges can see the
+    full flow offline.
     """
     import json
 
-    responses = [
-        ModelResponse(
-            content=json.dumps(
-                {
-                    "languages": ["Python"],
-                    "frameworks": [],
-                    "test_framework": "pytest",
-                    "build_system": "pyproject.toml",
-                    "conventions": [],
-                    "notes": "demo mode (scripted)",
-                }
+    profile = ModelResponse(
+        content=json.dumps(
+            {
+                "languages": ["Python"],
+                "frameworks": [],
+                "test_framework": "pytest",
+                "build_system": "pyproject.toml",
+                "conventions": [],
+                "notes": "demo mode (scripted)",
+            }
+        )
+    )
+    plan = ModelResponse(
+        content=json.dumps(
+            {
+                "issue_summary": "demo run",
+                "complexity": 2,
+                "subtasks": [
+                    {
+                        "id": "st-1",
+                        "title": "write the demo marker module",
+                        "description": "demo-mode placeholder change",
+                        "specialty": "refactoring",
+                        "complexity": 1,
+                        "files": ["demo_output.py"],
+                        "acceptance_criteria": ["demo completes"],
+                        "depends_on": [],
+                    }
+                ],
+                "risks": ["demo mode produces no real changes"],
+                "needs_collaboration": False,
+            }
+        )
+    )
+    write = ModelResponse(
+        content="",
+        tool_calls=[
+            ToolCall(
+                id="demo-write",
+                name="filesystem_write",
+                arguments={
+                    "path": "demo_output.py",
+                    "content": (
+                        '"""Demo-mode marker written by the scripted specialist."""\n'
+                        'DEMO_MARKER = "foreman-demo"\n'
+                    ),
+                    "mode": "create",
+                },
             )
-        ),
-        ModelResponse(
-            content=json.dumps(
-                {
-                    "issue_summary": "demo run",
-                    "complexity": 2,
-                    "subtasks": [
-                        {
-                            "id": "st-1",
-                            "title": "write the demo marker module",
-                            "description": "demo-mode placeholder change",
-                            "specialty": "refactoring",
-                            "complexity": 1,
-                            "files": ["demo_output.py"],
-                            "acceptance_criteria": ["demo completes"],
-                            "depends_on": [],
-                        }
-                    ],
-                    "risks": ["demo mode produces no real changes"],
-                    "needs_collaboration": False,
-                }
-            )
-        ),
-        ModelResponse(
-            content="",
-            tool_calls=[
-                ToolCall(
-                    id="demo-write",
-                    name="filesystem_write",
-                    arguments={
-                        "path": "demo_output.py",
-                        "content": (
-                            '"""Demo-mode marker written by the scripted specialist."""\n'
-                            'DEMO_MARKER = "foreman-demo"\n'
-                        ),
-                        "mode": "create",
-                    },
-                )
-            ],
-        ),
-        ModelResponse(content="TASK_COMPLETE: demo-mode specialist wrote demo_output.py (scripted)"),
-        ModelResponse(
-            content=json.dumps(
-                {
-                    "approved": True,
-                    "issues": [],
-                    "summary": "demo verdict (scripted)",
-                    "criteria_dispositions": [
-                        {
-                            "criterion": "demo completes",
-                            "satisfied": True,
-                            "evidence": "demo_output.py written (scripted)",
-                        }
-                    ],
-                }
-            )
-        ),
-    ]
-    return _DemoProvider(config, responses)
+        ],
+    )
+    complete = ModelResponse(
+        content="TASK_COMPLETE: demo-mode specialist wrote demo_output.py (scripted)"
+    )
+    verdict = ModelResponse(
+        content=json.dumps(
+            {
+                "approved": True,
+                "issues": [],
+                "summary": "demo verdict (scripted)",
+                "criteria_dispositions": [
+                    {
+                        "criterion": "demo completes",
+                        "satisfied": True,
+                        "evidence": "demo_output.py written (scripted)",
+                    }
+                ],
+            }
+        )
+    )
+    if role == "architect":
+        script = [profile, plan, verdict]
+    elif role == "implementer":
+        script = [write, complete]
+    else:
+        script = [complete]
+    return _DemoProvider(config, script)
 
 
 class _DemoProvider(FakeProvider):

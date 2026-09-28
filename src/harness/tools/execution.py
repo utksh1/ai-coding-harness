@@ -81,6 +81,11 @@ class RunTestsTool(AsyncExecutableTool):
     def __init__(self, repo_root: Path, timeout: float = DEFAULT_TIMEOUT) -> None:
         self._root = repo_root
         self._timeout = timeout
+        # Parallel-wave safety (review finding #11): concurrent specialists
+        # on one working tree must not race test runs (pyc conflicts, fixture
+        # clashes, port collisions). One lock per tool instance serializes
+        # suite runs; file edits stay parallel (batches are file-disjoint).
+        self._run_lock = asyncio.Lock()
 
     def validate_input(self, arguments: dict[str, Any]) -> list[str]:
         return []
@@ -132,25 +137,26 @@ class RunTestsTool(AsyncExecutableTool):
         argv = list(command)
         if path and name == "pytest":
             argv.append(path)
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                cwd=self._root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-            )
-        except OSError as exc:
-            return ToolResult(success=False, error=f"cannot spawn test runner: {exc}")
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), self._timeout)
-        except TimeoutError:
-            proc.kill()
-            return ToolResult(
-                success=False,
-                error=f"test run exceeded {self._timeout}s timeout",
-                data={"framework": name},
-            )
+        async with self._run_lock:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *argv,
+                    cwd=self._root,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                )
+            except OSError as exc:
+                return ToolResult(success=False, error=f"cannot spawn test runner: {exc}")
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), self._timeout)
+            except TimeoutError:
+                proc.kill()
+                return ToolResult(
+                    success=False,
+                    error=f"test run exceeded {self._timeout}s timeout",
+                    data={"framework": name},
+                )
         output = _trunc(f"{stdout.decode()}\n{stderr.decode()}".strip())
         passed = proc.returncode == 0
         return ToolResult(

@@ -42,7 +42,7 @@ class _Recorder:
 
 
 def _factory(calls: list[str]) -> Any:
-    def build(model_cfg: Any) -> _Recorder:
+    def build(model_cfg: Any, role: str | None = None, agent_id: str | None = None) -> _Recorder:
         calls.append(model_cfg.name)
         return _Recorder(model_cfg.name)
 
@@ -50,8 +50,9 @@ def _factory(calls: list[str]) -> Any:
 
 
 def test_agents_get_providers_from_their_own_profiles(tmp_path: Path) -> None:
-    """Architect on `cheap`, specialists on `default`: two distinct
-    providers; agents sharing a profile share ONE instance."""
+    """Architect on `cheap`, specialists on `default`: distinct provider
+    INSTANCES per agent (parallel waves need state-independent providers)
+    with the right model identity from each profile."""
     calls: list[str] = []
     pipeline = HarnessPipeline(
         tmp_path,
@@ -65,9 +66,11 @@ def test_agents_get_providers_from_their_own_profiles(tmp_path: Path) -> None:
     assert architect_provider is not impl_provider
     assert architect_provider.model == "model-for-fake-cheap"
     assert impl_provider.model == "model-for-fake-main"
-    assert ver_provider is impl_provider  # same profile -> shared instance
+    assert ver_provider.model == "model-for-fake-main"
+    assert ver_provider is not impl_provider  # per-agent instances
     assert calls.count("fake-cheap") == 1
-    assert calls.count("fake-main") == 1
+    # 3 default-bound agents + the pipeline's own default-profile provider
+    assert calls.count("fake-main") == 4
 
 
 def test_run_level_profile_overrides_default_bound_agents(tmp_path: Path) -> None:
@@ -83,7 +86,7 @@ def test_run_level_profile_overrides_default_bound_agents(tmp_path: Path) -> Non
     )
     # impl-1 explicitly cheap; arch/mgr/ver follow the run profile (cheap)
     assert pipeline._architect.provider.model == "model-for-fake-cheap"
-    assert pipeline._agents["impl-1"].provider is pipeline._architect.provider
+    assert pipeline._agents["impl-1"].provider.model == "model-for-fake-cheap"
     assert "fake-main" not in calls  # default profile never built
 
 
@@ -97,7 +100,7 @@ def test_unknown_agent_model_falls_back_to_run_profile(tmp_path: Path) -> None:
         model_profile="cheap",
     )
     assert pipeline._agents["ver-1"].provider.model == "model-for-fake-cheap"
-    assert pipeline._architect.provider is pipeline._agents["ver-1"].provider
+    assert pipeline._architect.provider.model == "model-for-fake-cheap"
 
 
 def test_injected_provider_overrides_all_bindings(tmp_path: Path) -> None:
@@ -141,7 +144,8 @@ def test_collaborator_inherits_primary_profile(tmp_path: Path) -> None:
         "impl-1", pipeline._placeholder_governor, _NullPack(), "run-1"
     )
     assert collaborator is not None
-    assert collaborator.provider is pipeline._agents["impl-1"].provider
+    assert collaborator.provider is not pipeline._agents["impl-1"].provider
+    assert collaborator.provider.model == pipeline._agents["impl-1"].provider.model
     assert collaborator.model_config["profile"] == "cheap"
 
 
