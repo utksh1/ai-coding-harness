@@ -201,10 +201,11 @@ def _architect_of(pipeline: HarnessPipeline) -> Any:
         return pipeline._architect
     from harness.agents.architect import build_architect
 
+    provider = pipeline._provider or pipeline._provider_for(pipeline._model_profile)
     return build_architect(
         "orchestrator-architect",
         {"provider": "service"},
-        pipeline._provider,
+        provider,
         pipeline._store,
         governor=_service_governor(pipeline),
     )
