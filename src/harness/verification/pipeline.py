@@ -408,20 +408,37 @@ async def _timed(
     return result
 
 
+def _sanitize_timing(text: str) -> str:
+    """Normalize wall-clock noise in test output for review evidence.
+
+    The final-review prompt embeds stage evidence; pytest's 'in 0.03s'
+    summary and float durations make those bytes timing-dependent, which
+    both flaks the A/B token bench (+/-1 token) and lets irrelevant timing
+    digits influence the verdict. Content survives; wall clock does not."""
+    import re
+
+    return re.sub(r"\bin \d+(?:\.\d+)?s\b", "in <t>s", text)
+
+
 def stage_report(results: list[StageResult]) -> str:
     """Markdown summary of a pipeline run (evidence-pack input)."""
     lines = ["| Stage | Result | Detail | Duration |", "|---|---|---|---|"]
     for result in results:
+        detail = _sanitize_timing(result.detail)
         lines.append(
             f"| {result.name} | {'PASS' if result.passed else 'FAIL'} "
-            f"| {result.detail[:160]} | {result.duration_seconds}s |"
+            f"| {detail[:160]} | {result.duration_seconds:.3f}s |"
         )
     for result in results:
         if result.evidence:
             lines.append("")
             lines.append(f"### {result.name} evidence")
             lines.append("```json")
-            lines.append(json.dumps(result.evidence, indent=2, sort_keys=True, default=str))
+            lines.append(
+                _sanitize_timing(
+                    json.dumps(result.evidence, indent=2, sort_keys=True, default=str)
+                )
+            )
             lines.append("```")
     overall = all(r.passed for r in results if r.blocking)
     lines.append("")
