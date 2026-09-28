@@ -119,15 +119,10 @@ def solve_command(args: argparse.Namespace) -> int:
         print(f"[error] configuration invalid:\n{exc}")
         return 1
 
-    provider: Any
     demo_mode = os.environ.get("HARNESS_DEMO") == "1"
     if demo_mode:
-        from harness.infrastructure.model_providers.fake import build_demo_provider
-
-        provider = build_demo_provider(config.models["default"])
         print("[warn] DEMO MODE: scripted model responses; evidence is illustrative only")
     else:
-        provider = create_model_provider(config.models["default"])
         key_env = config.models["default"].api_key_env
         has_key = bool(
             os.environ.get(key_env)
@@ -135,8 +130,6 @@ def solve_command(args: argparse.Namespace) -> int:
             or os.environ.get("OPENAI_API_KEY")
             or os.environ.get("CODEX_API_KEY")
             or os.environ.get("ANTHROPIC_API_KEY")
-            or key_env.startswith("sk-")
-            or len(key_env) > 25
         )
         if config.models["default"].provider != "fake" and not has_key:
             print(
@@ -145,8 +138,19 @@ def solve_command(args: argparse.Namespace) -> int:
             )
             return 3
 
+    def _provider_factory(model_cfg: Any) -> Any:
+        """One provider per models-profile: per-agent model bindings from
+        harness.yaml (architect vs specialists) are honored by the CLI too."""
+        if demo_mode:
+            from harness.infrastructure.model_providers.fake import build_demo_provider
+
+            return build_demo_provider(model_cfg)
+        return create_model_provider(model_cfg)
+
     store = create_context_store(config.storage)
-    pipeline = HarnessPipeline(repo_root=repo_root, config=config, provider=provider, store=store)
+    pipeline = HarnessPipeline(
+        repo_root=repo_root, config=config, store=store, provider_factory=_provider_factory
+    )
     from harness.infrastructure.model_providers.base import ModelAuthError
 
     try:

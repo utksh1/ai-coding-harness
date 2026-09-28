@@ -78,17 +78,35 @@ class HarnessPipeline:
         self,
         repo_root: Path,
         config: HarnessConfig,
-        provider: Any,
-        store: Any,
+        provider: Any = None,
+        store: Any = None,
         audit: AuditLog | None = None,
         event_sink: Any = None,
+        model_profile: str = "default",
+        provider_factory: Any = None,
     ) -> None:
         self._repo_root = Path(repo_root).resolve()  # canonical: macOS /tmp symlinks
         self._config = config
         self._store = store
         self._audit = audit or AuditLog(self._repo_root / ".harness" / "audit.jsonl")
         self._event_sink = event_sink
-        self._provider = provider
+        # Per-agent model binding (review finding #6): `agents[].model` names
+        # a `models:` profile and each agent gets the provider built FROM that
+ # profile - multi-model orchestration is real, not aspirational. An
+        # explicitly injected `provider` (tests, demo) overrides every binding;
+        # `provider_factory` builds (and caches) one provider per profile.
+        self._model_profile = (
+            model_profile if model_profile in config.models else "default"
+        )
+        # An injected provider (tests, demo) overrides every binding: any
+        # supplied factory is ignored so the injection is never bypassed.
+        self._provider_factory = provider_factory if provider is None else None
+        self._providers: dict[str, Any] = {}
+        self._provider = (
+            provider
+            if provider is not None
+            else (self._provider_for(self._model_profile) if provider_factory is not None else None)
+        )
         self._tools = build_default_tools(self._repo_root)
         self._agents: dict[str, Any] = {}
         self._coordination_ids: set[str] = set()
@@ -99,12 +117,39 @@ class HarnessPipeline:
         self._placeholder_governor = BudgetGovernor(store, config.budget, "unassigned")
         self._build_agents()
 
+    def _agent_profile(self, agent_model: str) -> str:
+        """Resolve one agent's `model` reference to a models-profile name.
+
+        Explicit non-default bindings hold (architect on `gemini` stays on
+        gemini whatever the run picked); `default` and unknown names follow
+        the run-level default profile (the cockpit's per-run picker)."""
+        if agent_model and agent_model != "default" and agent_model in self._config.models:
+            return agent_model
+        return self._model_profile if self._model_profile in self._config.models else "default"
+
+    def _provider_for(self, profile: str) -> Any:
+        """One cached provider per distinct profile (shared instances for
+        agents on the same profile; no factory -> the injected provider)."""
+        name = profile if profile in self._config.models else "default"
+        if name not in self._providers:
+            if self._provider_factory is None:
+                return self._provider
+            self._providers[name] = self._provider_factory(self._config.models[name])
+        return self._providers[name]
+
     def _build_agents(self) -> None:
         slots: list[SpecialistSlot] = []
         for agent_config in self._config.agents:
             if not agent_config.enabled:
                 continue
-            model_config = {"provider": self._config.models["default"].provider}
+            profile = self._agent_profile(agent_config.model)
+            profile_cfg = self._config.models.get(profile) or self._config.models["default"]
+            model_config = {
+                "provider": profile_cfg.provider,
+                "model": profile_cfg.name,
+                "profile": profile,
+            }
+            agent_provider = self._provider_for(profile)
             if agent_config.role == "architect":
                 self._architect = ArchitectAgent(
                     agent_id=agent_config.agent_id,
@@ -116,7 +161,7 @@ class HarnessPipeline:
                         "planning",
                         stale_tool_results=agent_config.stale_tool_results,
                     ),
-                    provider=self._provider,
+                    provider=agent_provider,
                     store=self._store,
                     governor=self._placeholder_governor,
                 )
@@ -134,7 +179,7 @@ class HarnessPipeline:
                         "coordination",
                         stale_tool_results=agent_config.stale_tool_results,
                     ),
-                    provider=self._provider,
+                    provider=agent_provider,
                     store=self._store,
                     governor=self._placeholder_governor,
                 )
@@ -145,7 +190,7 @@ class HarnessPipeline:
                 agent_id=agent_config.agent_id,
                 role=agent_config.role,
                 model_config=model_config,
-                provider=self._provider,
+                provider=agent_provider,
                 store=self._store,
                 governor=self._placeholder_governor,  # replaced per-run
                 tools=self._tools,
@@ -472,16 +517,29 @@ class HarnessPipeline:
     def _add_collaborator(
         self, primary_agent_id: str, governor: BudgetGovernor, pack: EvidencePack, run_id: str
     ) -> Any | None:
-        """Spawn an extra specialist for a complex task (bounded, per run)."""
+        """Spawn an extra specialist for a complex task (bounded, per run).
+
+        The collaborator inherits the PRIMARY's model profile: a collaborator
+        on a different model than the agent it assists would be a routing
+        accident, not a feature."""
         if self._collaborators_added >= 2:
             return None
         self._collaborators_added += 1
         agent_id = f"{primary_agent_id}-collab-{self._collaborators_added}"
+        primary = self._agents.get(primary_agent_id)
+        primary_profile = (
+            primary.model_config.get("profile") if primary is not None else None
+        ) or self._model_profile
+        profile_cfg = self._config.models.get(primary_profile) or self._config.models["default"]
         agent = build_agent(
             agent_id=agent_id,
             role="implementer",
-            model_config={"provider": self._config.models["default"].provider},
-            provider=self._provider,
+            model_config={
+                "provider": profile_cfg.provider,
+                "model": profile_cfg.name,
+                "profile": primary_profile,
+            },
+            provider=self._provider_for(primary_profile),
             store=self._store,
             governor=self._placeholder_governor,
             tools=self._tools,

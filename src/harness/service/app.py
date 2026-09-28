@@ -290,19 +290,31 @@ def create_app(
                 or (os.environ.get("HARNESS_DEMO") == "1")
                 or (not has_key and model_cfg.provider != "fake")
             )
-            resolved: Any
-            if effective_demo and provider is None:
+            resolved: Any = None
+            factory: Any = None
+            if provider is not None:
+                # Test injection: one provider overrides every binding; no
+                # factory (the pipeline must not build around the injection).
+                resolved = provider
+            else:
                 from harness.infrastructure.model_providers.fake import build_demo_provider
 
-                resolved = build_demo_provider(model_cfg)
-            else:
-                resolved = provider or create_model_provider(model_cfg)
+                def factory(model_cfg: Any, _demo: bool = effective_demo) -> Any:
+                    """One provider per models-profile: per-agent model
+                    binding (architect on one profile, specialists on
+                    another) is resolved by the pipeline, not collapsed."""
+                    if _demo:
+                        return build_demo_provider(model_cfg)
+                    return create_model_provider(model_cfg)
+
             pipelines[key] = HarnessPipeline(
                 repo_root=Path(repo_root),
                 config=cfg,
                 provider=resolved,
+                provider_factory=factory,
                 store=store,
                 event_sink=event_sink,
+                model_profile=model_profile,
             )
         return pipelines[key]
 
