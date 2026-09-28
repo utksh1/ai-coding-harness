@@ -151,3 +151,68 @@ def test_error_outputs_are_scanned_too() -> None:
     )
     agent._guard_untrusted("run_tests", result)
     assert result.output is None or "UNTRUSTED" not in (result.output or "")
+
+
+async def test_recovery_retry_receives_attempt_digest() -> None:
+    """The retry's fresh window opens with WHAT THE PRIOR ATTEMPT DID
+    (finding #15): trajectory digest survives the window clear, so L1
+    recovery is informed instead of rediscovering everything."""
+    from harness.agents.task import Task
+
+    # Attempt 1: reads a file, fails (script raises mid-loop).
+    provider = FakeProvider(
+        fake_model_config,
+        responses=[
+            ModelResponse(
+                content="",
+                tool_calls=[
+                    {"id": "c1", "name": "echo_tool", "arguments": {"text": "reading app.py"}},
+                ],
+            ),
+            ModelResponse(content="I could not finish."),
+            ModelResponse(content="still cannot"),
+            ModelResponse(content="giving up this attempt"),
+        ],
+    )
+    agent, store = _agent(provider)
+    task = Task(id="t-3", title="t", description=TASK_PROMPT)
+    first = await agent.execute_task(task)
+    assert first.success is False  # honest unmarked failure (FIX-1)
+    assert agent._attempt_trajectory  # trajectory captured
+
+    # Retry (the L1 ladder re-calls execute_task on the same agent+task).
+    retry_provider = FakeProvider(
+        fake_model_config,
+        responses=[ModelResponse(content="TASK_COMPLETE: fixed with the digest in view")],
+    )
+    agent.provider = retry_provider
+    second = await agent.execute_task(task)
+    assert second.success
+
+    context = store.load_agent_context("impl-1", "t-3")
+    digest_turns = [t for t in context.recent if "PREVIOUS ATTEMPT" in (t.content or "")]
+    assert digest_turns, "retry window never received the attempt digest"
+    assert "echo_tool" in digest_turns[0].content
+    assert "-> ok" in digest_turns[0].content  # the tool ran; the MODEL failed to finish
+
+
+async def test_first_attempt_has_no_digest() -> None:
+    from harness.agents.task import Task
+
+    provider = FakeProvider(
+        fake_model_config, responses=[ModelResponse(content="TASK_COMPLETE: done")]
+    )
+    agent, store = _agent(provider)
+    await agent.execute_task(Task(id="t-4", title="t", description=TASK_PROMPT))
+    context = store.load_agent_context("impl-1", "t-4")
+    assert not [t for t in context.recent if "PREVIOUS ATTEMPT" in (t.content or "")]
+
+
+def test_trajectory_digest_is_bounded() -> None:
+    from harness.agents.llm_agent import _format_trajectory
+
+    big = [{"tool": f"tool_{i}", "args": f"arg_{i}" * 20, "ok": i % 2 == 0} for i in range(200)]
+    digest = _format_trajectory(big)
+    assert len(digest) <= 1500
+    assert "tool_199" in digest  # newest kept
+    assert "tool_0(" not in digest  # oldest dropped

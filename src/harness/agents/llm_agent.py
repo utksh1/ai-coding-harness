@@ -51,8 +51,10 @@ DEFAULT_STALE_TOOL_RESULTS = 6
 """Tool results outside the newest N keep full text; older ones are stubbed.
 
 Tool outputs dominate window bytes and replay verbatim on every step (M5
-issue #61). The store stays lossless; only message assembly degrades stale
-results to one-line stubs.
+issue #61). STORAGE is lossless (raw turns persist in the context store);
+the agent-VISIBLE context is a bounded, lossy VIEW by design - the two
+must never be conflated (review finding #14: 'the store is lossless' is
+not 'the agent sees everything').
 """
 MAX_UNMARKED_NUDGES = 2
 _CAPABILITY_CACHE = CapabilityCache()
@@ -244,9 +246,10 @@ class StoreWindow:
         its `_payload`, so the native tool-calling protocol round-trips.
 
         Tool results outside the newest `stale_tool_results` are assembled as
-        one-line stubs (#61): the store keeps them losslessly, but replaying
-        every old output at full size on every step is the largest single
-        prompt-token cost in multi-round tasks.
+        one-line stubs (#61): STORAGE keeps them losslessly, but the
+        agent-visible window is a bounded lossy view - replaying every old
+        output at full size on every step is the largest single prompt-token
+        cost in multi-round tasks.
         """
         context = self._store.load_agent_context(self._agent_id, self._task_id)
         tool_positions = [i for i, turn in enumerate(context.recent) if turn.role == "tool"]
@@ -315,6 +318,9 @@ class LLMAgent(BaseAgent):
         self.knowledge_max_chars = knowledge_max_chars
         self._active_task: str | None = None
         self._attempts: dict[str, int] = {}
+        # Attempt trajectory (review finding #15): what the CURRENT attempt's
+        # tool loop already did; captured as a digest for recovery retries.
+        self._attempt_trajectory: list[dict[str, str | bool]] = []
         self._capabilities: ModelCapabilities | None = None
         self.capability_cache: CapabilityCache = _CAPABILITY_CACHE
         # Cockpit tracing (contract: docs/cockpit-events.md). None until the
@@ -451,12 +457,18 @@ class LLMAgent(BaseAgent):
         # Recovery-ladder retries reuse the task id, so drop the failed
         # attempt's persisted turns before reopening the window: replaying
         # them appends duplicate TASK turns and the model re-sends its old
-        # replies instead of acting (live-run finding).
+        # replies instead of acting (live-run finding). The attempt's
+        # TRAJECTORY survives as a digest (review finding #15): the retry
+        # learns what was already tried instead of rediscovering it.
+        prior_trajectory = self._attempt_trajectory
+        self._attempt_trajectory = []
         self.store.clear_window(self.agent_id, task.id)
         self.context_window = StoreWindow(
             self.store, self.agent_id, task.id, stale_tool_results=self.stale_tool_results
         )
         self.context_window.append("user", compose_task_prompt(task))
+        if prior_trajectory:
+            self.context_window.append("user", _format_trajectory(prior_trajectory))
         try:
             summary, success, error = await self._loop(task)
         except BudgetExhausted:
@@ -776,6 +788,11 @@ class LLMAgent(BaseAgent):
         started = time.monotonic()
         result = await self._invoke_tool_untraced(name, arguments)
         self._emit_tool(name, arguments, result, (time.monotonic() - started) * 1000)
+        # Attempt trajectory (review finding #15): what THIS attempt already
+        # did, so a recovery retry starts informed instead of blind.
+        self._attempt_trajectory.append(
+            {"tool": name, "args": _args_digest(name, arguments), "ok": result.success}
+        )
         # Trust boundary (review finding #13): the cockpit sees the raw
         # output, the MODEL sees the wrapped one.
         self._guard_untrusted(name, result)
@@ -931,6 +948,28 @@ _DIGEST_PATH_KEYS = ("path", "file", "file_path", "repo_path", "directory")
 _DIGEST_COMMAND_KEYS = ("command", "cmd")
 _DIGEST_PATTERN_KEYS = ("pattern", "query", "regex")
 _DIGEST_NODE_KEYS = ("node_id", "test", "node", "name")
+
+
+def _format_trajectory(trajectory: list[dict[str, str | bool]]) -> str:
+    """Bounded digest of a failed attempt's tool trajectory (finding #15).
+
+    The retry's fresh window opens with what was already tried (tool +
+    identifier + outcome) so recovery is informed instead of blind - the
+    raw conversation stays cleared (replaying it made models re-send old
+    replies), but the ATTEMPT's facts survive: files read, edits attempted,
+    commands that failed. Never contents: identifiers only, capped."""
+    entries = [
+        f"- {entry.get('tool', '?')}({entry.get('args', '')}) -> "
+        f"{'ok' if entry.get('ok') else 'FAILED'}"
+        for entry in trajectory[-40:]
+    ]
+    # The cap keeps the NEWEST work (the failures right before giving up
+    # are the most relevant to the retry), not the oldest.
+    body = "\n".join(entries)[-1300:]
+    return (
+        "PREVIOUS ATTEMPT on this task already did the following "
+        "(do NOT repeat identical calls; change approach):\n" + body
+    )
 
 
 def _args_digest(name: str, arguments: dict[str, Any]) -> str:
