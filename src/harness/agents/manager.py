@@ -266,8 +266,7 @@ class ManagerAgent(LLMAgent):
         self.store.save_global("assignments", remaining)
         self.context_window.append(
             "assistant",
-            f"task {task_id} finished by {agent_id} "
-            f"(success={success}, tokens={tokens_used})",
+            f"task {task_id} finished by {agent_id} (success={success}, tokens={tokens_used})",
         )
 
     async def monitor_progress(self) -> list[StatusUpdate]:

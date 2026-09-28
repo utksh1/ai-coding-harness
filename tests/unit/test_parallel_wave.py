@@ -149,8 +149,9 @@ async def test_parallel_wave_overlaps_execution(work_repo: Path) -> None:
                 issues=[],
                 summary="ok",
                 criteria_dispositions=[
-                    __import__("harness.agents.architect", fromlist=["CriterionDisposition"])
-                    .CriterionDisposition(criterion=c, satisfied=True, evidence="x")
+                    __import__(
+                        "harness.agents.architect", fromlist=["CriterionDisposition"]
+                    ).CriterionDisposition(criterion=c, satisfied=True, evidence="x")
                     for c in ("c1", "c2")
                 ],
             )
@@ -182,7 +183,12 @@ async def test_parallel_wave_overlaps_execution(work_repo: Path) -> None:
 
     governor = BudgetGovernor(pipeline._store, BudgetConfig(total_tokens=1_000_000), "wave-1")
     results = await pipeline._run_batch(
-        batch, governor, _StubMetrics(), pack, "wave-1", _FixedArchitect()  # type: ignore[arg-type]
+        batch,
+        governor,
+        _StubMetrics(),
+        pack,
+        "wave-1",
+        _FixedArchitect(),  # type: ignore[arg-type]
     )
     elapsed = time.monotonic() - started
     assert len(results) == 2
@@ -234,9 +240,16 @@ async def test_shared_injected_provider_degrades_to_serial(work_repo: Path) -> N
     from harness.engine.budget import BudgetGovernor
 
     pack = EvidencePack(work_repo / "results", "serial-1")
-    governor = BudgetGovernor(MemoryContextStore(), BudgetConfig(total_tokens=1_000_000), "serial-1")
+    governor = BudgetGovernor(
+        MemoryContextStore(), BudgetConfig(total_tokens=1_000_000), "serial-1"
+    )
     results = await pipeline._run_batch(
-        fixed_plan.subtasks, governor, _StubMetrics(), pack, "serial-1", _FixedArchitect()  # type: ignore[arg-type]
+        fixed_plan.subtasks,
+        governor,
+        _StubMetrics(),
+        pack,
+        "serial-1",
+        _FixedArchitect(),  # type: ignore[arg-type]
     )
     assert len(results) == 2  # serial wave of 2 completes
     assert all(r.success for r in results)
@@ -247,7 +260,9 @@ async def test_planned_collaboration_runs_runner_up_review(work_repo: Path) -> N
     review-and-fix pass over the primary's work (advisory, evented)."""
 
     def factory(model_cfg: Any, role: str | None = None, agent_id: str | None = None) -> Any:
-        return FakeProvider(model_cfg, responses=[ModelResponse(content="TASK_COMPLETE: x")], loop=True)
+        return FakeProvider(
+            model_cfg, responses=[ModelResponse(content="TASK_COMPLETE: x")], loop=True
+        )
 
     # Custom plan: complexity 9 (above threshold), single subtask.
     plan_json = json.dumps(
@@ -273,7 +288,9 @@ async def test_planned_collaboration_runs_runner_up_review(work_repo: Path) -> N
     from harness.agents.architect import Plan
     from harness.engine.evidence import EvidencePack
 
-    pipeline = HarnessPipeline(work_repo, _config(), store=MemoryContextStore(), provider_factory=factory)
+    pipeline = HarnessPipeline(
+        work_repo, _config(), store=MemoryContextStore(), provider_factory=factory
+    )
     fixed_plan = Plan.model_validate(json.loads(plan_json))
     events: list[dict[str, Any]] = []
     pack = EvidencePack(work_repo / "results", "collab-1", event_sink=events.append)
@@ -286,7 +303,12 @@ async def test_planned_collaboration_runs_runner_up_review(work_repo: Path) -> N
 
     governor = BudgetGovernor(pipeline._store, BudgetConfig(total_tokens=1_000_000), "collab-1")
     results = await pipeline._run_batch(
-        fixed_plan.subtasks, governor, _StubMetrics(), pack, "collab-1", _FixedArchitect()  # type: ignore[arg-type]
+        fixed_plan.subtasks,
+        governor,
+        _StubMetrics(),
+        pack,
+        "collab-1",
+        _FixedArchitect(),  # type: ignore[arg-type]
     )
     assert results and results[0].success
     collab_events = [e for e in events if e.get("event") == "specialist.collaborator_added"]
@@ -332,7 +354,9 @@ async def test_gather_wave_propagates_first_real_exception(work_repo: Path) -> N
             model_cfg, responses=[ModelResponse(content="TASK_COMPLETE: x")], loop=True
         )
 
-    pipeline = HarnessPipeline(work_repo, _config(), store=MemoryContextStore(), provider_factory=factory)
+    pipeline = HarnessPipeline(
+        work_repo, _config(), store=MemoryContextStore(), provider_factory=factory
+    )
     # Inject an infrastructure-level raiser OUTSIDE the agent loop: the
     # manager's completion hook raising BudgetExhausted (the ladder absorbs
     # task-level exceptions by design; the wave guard covers raisers between
@@ -360,7 +384,12 @@ async def test_gather_wave_propagates_first_real_exception(work_repo: Path) -> N
 
     with pytest.raises(BudgetExhausted):
         await pipeline._run_batch(
-            fixed_plan.subtasks, governor, _StubMetrics(), pack, "boom-1", _FixedArchitect()  # type: ignore[arg-type]
+            fixed_plan.subtasks,
+            governor,
+            _StubMetrics(),
+            pack,
+            "boom-1",
+            _FixedArchitect(),  # type: ignore[arg-type]
         )
 
 
@@ -379,7 +408,13 @@ def test_planned_collaboration_skips_unknown_runner_up(work_repo: Path) -> None:
 
     async def go() -> None:
         await pipeline._planned_collaboration(
-            task, ["ghost-1", "ghost-2"], _Primary(), _NullGovernor(), pack, "skip-1", _StubMetrics()
+            task,
+            ["ghost-1", "ghost-2"],
+            _Primary(),
+            _NullGovernor(),
+            pack,
+            "skip-1",
+            _StubMetrics(),
         )
 
     import asyncio
@@ -400,5 +435,10 @@ def _subtask() -> Any:
     from harness.agents.architect import SubTask
 
     return SubTask(
-        id="st-1", title="t", description="d", specialty="refactoring", complexity=1, files=["app.py"]
+        id="st-1",
+        title="t",
+        description="d",
+        specialty="refactoring",
+        complexity=1,
+        files=["app.py"],
     )

@@ -69,7 +69,11 @@ def _verdict_json() -> str:
             "issues": [],
             "summary": "add is correct now",
             "criteria_dispositions": [
-                {"criterion": "add(2, 3) == 5", "satisfied": True, "evidence": "calculator.py now adds"}
+                {
+                    "criterion": "add(2, 3) == 5",
+                    "satisfied": True,
+                    "evidence": "calculator.py now adds",
+                }
             ],
         }
     )

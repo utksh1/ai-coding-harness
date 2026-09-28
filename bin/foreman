@@ -1,0 +1,581 @@
+#!/usr/bin/env bash
+# bin/foreman — the single entry point for the Foreman platform.
+#
+#   foreman start [--demo]        start orchestrator (:8000) + gateway (:8080)
+#   foreman stop                  stop both services
+#   foreman restart [--demo]      stop + start
+#   foreman status                health, versions, journal, sessions
+#   foreman tui                   launch the Go TUI cockpit (auto-starts services)
+#   foreman web                   print (and try to open) the web cockpit URL
+#   foreman run ISSUE [opts]      submit a run through the gateway (chat session)
+#   foreman followup RUN_ID MSG  continue a session (same repo, prior context)
+#   foreman cancel RUN_ID         cancel an active run
+#   foreman runs                  list chat sessions
+#   foreman projects [add|rm]     manage the project registry
+#   foreman models                list model profiles from harness.yaml
+#   foreman logs [orch|gateway]   tail service logs
+#   foreman doctor [--probe]      environment + service diagnostics
+#
+# Design notes (each line below encodes a real incident):
+#   - services are daemonized with `setsid -f` so they survive the parent
+#     shell's session being reaped (a plain `setsid` lost two live runs);
+#   - the PID is written by the daemon itself (bash -c 'echo $$; exec ...')
+#     because `$!` after `setsid -f` is the short-lived forking parent;
+#   - GATEWAY_EVENTS_URL is opt-in and set ONLY here for local dev, so
+#     unit tests never POST to a live gateway;
+#   - the gateway journal is pinned to an absolute path so the CWD the
+#     gateway was launched from never matters after a restart.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="$ROOT/.venv/bin/python"
+GW_BIN="$ROOT/bin/foreman-gateway"
+TUI_BIN="$ROOT/bin/foreman-tui"
+
+# User-level Go installs (the documented local-dev path: ~/.local/go/bin/go)
+# are not always on PATH in fresh shells — discover instead of failing.
+if ! command -v go >/dev/null 2>&1 && [ -x "$HOME/.local/go/bin/go" ]; then
+  PATH="$HOME/.local/go/bin:$PATH"
+  export PATH
+fi
+LOGDIR="$ROOT/logs"
+RUNDIR="$ROOT/.harness/runtime"
+ORCH_PID_FILE="$RUNDIR/orchestrator.pid"
+GW_PID_FILE="$RUNDIR/gateway.pid"
+ORCH_LOG="$LOGDIR/orchestrator.log"
+GW_LOG="$LOGDIR/gateway.log"
+JOURNAL="$LOGDIR/gateway-events.jsonl"
+
+ORCH_PORT="${ORCH_PORT:-8000}"
+GW_PORT="${GW_PORT:-8080}"
+ORCH_URL="http://127.0.0.1:${ORCH_PORT}"
+GW_URL="http://127.0.0.1:${GW_PORT}"
+
+# Number of seconds `start` waits for each service's health endpoint.
+START_TIMEOUT="${FOREMAN_START_TIMEOUT:-60}"
+
+C_GOOD=$'\033[32m'; C_BAD=$'\033[31m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'; C_OFF=$'\033[0m'
+if [ ! -t 1 ]; then C_GOOD=""; C_BAD=""; C_DIM=""; C_BOLD=""; C_OFF=""; fi
+
+say()  { printf '%s\n' "$*"; }
+ok()   { printf '%s%s%s\n' "$C_GOOD" "$*" "$C_OFF"; }
+bad()  { printf '%s%s%s\n' "$C_BAD" "$*" "$C_OFF" >&2; }
+dim()  { printf '%s%s%s\n' "$C_DIM" "$*" "$C_OFF"; }
+die()  { bad "error: $*" >&2; exit 1; }
+
+usage() {
+  sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# ---------------------------------------------------------------- health ----
+
+orch_up() { curl -sf -m 2 "$ORCH_URL/health" >/dev/null 2>&1; }
+gw_up()   { curl -sf -m 2 "$GW_URL/api/health" >/dev/null 2>&1; }
+
+pid_alive() {
+  local pid="$1"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+read_pid() {  # file -> pid or empty
+  local f="$1"
+  [ -f "$f" ] && cat "$f" 2>/dev/null || true
+}
+
+wait_http() {  # url timeout
+  local url="$1" t deadline
+  t="${2:-30}"
+  deadline=$(( $(date +%s) + t ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    curl -sf -m 2 "$url" >/dev/null 2>&1 && return 0
+    sleep 0.5
+  done
+  return 1
+}
+
+# Read a pid file, tolerating the daemon's write landing a beat later.
+read_pid_wait() {  # file attempts
+  local f="$1" i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if [ -s "$f" ]; then cat "$f" 2>/dev/null || true; return 0; fi
+    sleep 0.3
+  done
+  return 0
+}
+
+# ---------------------------------------------------------------- start -----
+
+ensure_build() {  # build gateway/TUI binaries when missing or source newer
+  command -v go >/dev/null 2>&1 || return 0   # no toolchain: reuse existing binaries
+  local built=0
+  for pair in ".:foreman-gateway" "./cmd/tui:foreman-tui"; do
+    local pkg="${pair%%:*}" out="${pair##*:}"
+    if [ ! -x "$ROOT/bin/$out" ] || [ -n "$(find "$ROOT/gateway" -name '*.go' -newer "$ROOT/bin/$out" -print -quit 2>/dev/null)" ]; then
+      dim ">> building bin/$out (source newer than binary)"
+      (cd "$ROOT/gateway" && go build -o "$ROOT/bin/$out" "$pkg") || die "go build $pkg failed"
+      built=1
+    fi
+  done
+  return 0
+}
+
+cmd_start() {
+  local demo=0
+  [ "${1:-}" = "--demo" ] && demo=1
+  [ -x "$PY" ] || die "python venv missing — run: make setup"
+  mkdir -p "$LOGDIR" "$RUNDIR"
+
+  if orch_up && gw_up; then
+    ok "foreman is already running (orchestrator :$ORCH_PORT, gateway :$GW_PORT)"
+    return 0
+  fi
+
+  ensure_build
+  [ -x "$GW_BIN" ] || die "gateway binary missing — run: make gateway (needs Go)"
+
+  # --- orchestrator ---------------------------------------------------------
+  if ! orch_up; then
+    [ -f "$ORCH_LOG" ] && mv "$ORCH_LOG" "$ORCH_LOG.1" 2>/dev/null || true
+    : > "$ORCH_LOG"
+    local orch_env=(GATEWAY_EVENTS_URL="$GW_URL/api/events" PYTHONUNBUFFERED=1)
+    [ "$demo" = 1 ] && orch_env+=(HARNESS_DEMO=1)
+    setsid -f bash -c '
+      echo $$ > "'"$ORCH_PID_FILE"'"
+      exec env '"${orch_env[*]}"' "'"$PY"'" -m uvicorn harness.service.app:create_app \
+        --factory --host 127.0.0.1 --port '"$ORCH_PORT"' --log-level warning \
+        >> "'"$ORCH_LOG"'" 2>&1' >/dev/null 2>&1 < /dev/null
+    say ">> starting orchestrator on :$ORCH_PORT (pid $(read_pid_wait "$ORCH_PID_FILE"))"
+    wait_http "$ORCH_URL/health" "$START_TIMEOUT" \
+      || { tail -20 "$ORCH_LOG" >&2; die "orchestrator failed to become healthy"; }
+    ok "orchestrator up  :$ORCH_PORT"
+  else
+    dim ">> orchestrator already up on :$ORCH_PORT"
+  fi
+
+  # --- gateway ---------------------------------------------------------------
+  if ! gw_up; then
+    [ -f "$GW_LOG" ] && mv "$GW_LOG" "$GW_LOG.1" 2>/dev/null || true
+    : > "$GW_LOG"
+    setsid -f bash -c '
+      echo $$ > "'"$GW_PID_FILE"'"
+      exec env GATEWAY_ADDR=":'"$GW_PORT"'" \
+        ORCHESTRATOR_URL="'"$ORCH_URL"'" \
+        GATEWAY_EVENTS_LOG="'"$JOURNAL"'" \
+        "'"$GW_BIN"'" >> "'"$GW_LOG"'" 2>&1' >/dev/null 2>&1 < /dev/null
+    say ">> starting gateway on :$GW_PORT (pid $(read_pid_wait "$GW_PID_FILE"))"
+    wait_http "$GW_URL/api/health" "$START_TIMEOUT" \
+      || { tail -20 "$GW_LOG" >&2; die "gateway failed to become healthy"; }
+    ok "gateway up        :$GW_PORT"
+  else
+    dim ">> gateway already up on :$GW_PORT"
+  fi
+
+  dim ">> web cockpit: $GW_URL/   (foreman web / foreman tui)"
+  if [ "$demo" = 1 ]; then
+    dim ">> HARNESS_DEMO=1: runs will use scripted model responses (no key needed)"
+  fi
+}
+
+# ----------------------------------------------------------------- stop -----
+
+stop_one() {  # pidfile name kill-pattern
+  # kill-pattern is matched against full command lines AND scoped to this
+  # repo's paths, so a second checkout's services are never touched.
+  local pidfile="$1" name="$2" pattern="$3" pid
+  pid="$(read_pid "$pidfile")"
+  if pid_alive "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 1 20); do pid_alive "$pid" || break; sleep 0.5; done
+    pid_alive "$pid" && { bad "$name did not exit on SIGTERM; SIGKILL"; kill -9 "$pid" 2>/dev/null || true; }
+    ok "$name stopped"
+  else
+    dim ">> $name not running (pid file ${pid:-missing})"
+  fi
+  rm -f "$pidfile"
+  # Orphan sweep for this service only: processes matching the pattern but
+  # not tracked by a pid file (e.g. started before a reboot of the launcher).
+  pkill -f "$pattern" 2>/dev/null || true
+  return 0
+}
+
+cmd_stop() {
+  stop_one "$GW_PID_FILE" "gateway" "$GW_BIN"
+  sleep 0.5
+  stop_one "$ORCH_PID_FILE" "orchestrator" "harness.service.app.*--port $ORCH_PORT"
+  if orch_up || gw_up; then
+    sleep 1
+    orch_up || gw_up || true
+  fi
+  ok "foreman stopped"
+}
+
+# --------------------------------------------------------------- status -----
+
+cmd_status() {
+  local fail=0
+  printf '%sforeman%s\n' "$C_BOLD" "$C_OFF"
+  dim "root: $ROOT"
+
+  local pid
+  pid="$(read_pid "$ORCH_PID_FILE")"
+  if orch_up; then
+    local v; v="$(curl -sf -m 3 "$ORCH_URL/health" | "$PY" -c 'import json,sys; print(json.load(sys.stdin).get("version","?"))' 2>/dev/null || echo '?')"
+    ok "  orchestrator  :$ORCH_PORT  up  (v$v, pid ${pid:-?})"
+  else
+    bad "  orchestrator  :$ORCH_PORT  DOWN (pid file: ${pid:-none})"
+    fail=1
+  fi
+
+  pid="$(read_pid "$GW_PID_FILE")"
+  if gw_up; then
+    ok "  gateway       :$GW_PORT  up  (pid ${pid:-?})"
+  else
+    bad "  gateway       :$GW_PORT  DOWN (pid file: ${pid:-none})"
+    fail=1
+  fi
+
+  if [ -f "$JOURNAL" ]; then
+    local lines size
+    lines="$(wc -l < "$JOURNAL" | tr -d ' ')"
+    size="$(du -h "$JOURNAL" | cut -f1)"
+    dim "  journal       $JOURNAL ($lines events, $size)"
+  else
+    dim "  journal       (none yet — starts with the first run)"
+  fi
+
+  if gw_up; then
+    "$PY" - "$GW_URL" <<'PYEOF' || fail=1
+import json, sys, urllib.request
+
+url = sys.argv[1]
+try:
+    with urllib.request.urlopen(url + "/api/runs", timeout=3) as r:
+        runs = json.load(r).get("runs", [])
+except Exception as exc:
+    print(f"  sessions       (unavailable: {exc})", file=sys.stderr)
+    sys.exit(1)
+live = [r for r in runs if r.get("status") == "running"]
+print(f"  sessions      {len(runs)} total, {len(live)} active")
+for r in runs[:5]:
+    mark = {"verified": "✔", "failed": "✘", "running": "…", "cancelled": "■"}.get(r.get("status", ""), " ")
+    title = (r.get("title") or r.get("run_id", ""))[:48]
+    prof = r.get("model_profile") or "default"
+    print(f"    {mark} {r.get('run_id', '?')[:8]}  {title:<48}  [{prof}] {r.get('status', '?')}")
+PYEOF
+  fi
+  exit "$fail"
+}
+
+# ------------------------------------------------------------- services ----
+
+ensure_services() {
+  orch_up && gw_up && return 0
+  dim ">> services not running — starting them (foreman start)"
+  cmd_start >/dev/null
+  orch_up && gw_up || die "could not bring up services; try: foreman doctor"
+}
+
+# ------------------------------------------------------------------- tui ----
+
+cmd_tui() {
+  ensure_services
+  ensure_build
+  [ -x "$TUI_BIN" ] || die "TUI binary missing — run: make tui-go (needs Go)"
+  say ">> TUI cockpit connecting to $GW_URL (GATEWAY_URL overrides)"
+  exec "$TUI_BIN"
+}
+
+cmd_web() {
+  ensure_services
+  ok "web cockpit: $GW_URL/"
+  command -v xdg-open >/dev/null 2>&1 && xdg-open "$GW_URL/" >/dev/null 2>&1 || true
+}
+
+# ------------------------------------------------------------------- run ----
+
+api_post() {  # url json -> body
+  curl -sf -m 15 -X POST "$1" -H 'Content-Type: application/json' -d "$2"
+}
+api_get()  { curl -sf -m 15 "$1"; }
+
+cmd_run() {
+  local issue="" repo="$PWD" model="" title="" followup="" demo=0 wait=0 issue_file=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo)     repo="$2"; shift 2 ;;
+      --model)    model="$2"; shift 2 ;;
+      --title)    title="$2"; shift 2 ;;
+      --followup) followup="$2"; shift 2 ;;
+      --demo)     demo=1; shift ;;
+      --wait)     wait=1; shift ;;
+      --issue-file) issue_file="$2"; shift 2 ;;
+      -h|--help)
+        sed -n '/^#   foreman run/,/^#   foreman followup/p' "$0" | sed 's/^# \{0,1\}//'; return 0 ;;
+      *) issue="$1"; shift ;;
+    esac
+  done
+  [ -n "$issue_file" ] && issue="$(cat "$issue_file")"
+  [ -n "$issue" ] || die "run needs an issue: foreman run \"fix the login bug\" --repo ~/code/app"
+
+  repo="$(cd "$repo" 2>/dev/null && pwd)" || die "repo path not found: $2"
+  ensure_services
+
+  local payload
+  payload="$("$PY" -c '
+import json, sys
+print(json.dumps({
+    "issue": sys.argv[1], "repo_root": sys.argv[2],
+    **({"demo_mode": True} if sys.argv[3] == "1" else {}),
+    **({"model_profile": sys.argv[4]} if sys.argv[4] else {}),
+    **({"title": sys.argv[5]} if sys.argv[5] else {}),
+    **({"followup_of": sys.argv[6]} if sys.argv[6] else {}),
+}))' "$issue" "$repo" "$demo" "$model" "$title" "$followup")"
+
+  local resp
+  resp="$(api_post "$GW_URL/api/tasks" "$payload")" \
+    || die "gateway rejected the run (is the orchestrator up? foreman status)"
+  local run_id
+  run_id="$(printf '%s' "$resp" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')"
+  ok "run accepted: $run_id"
+  dim "  repo:    $repo"
+  dim "  model:   ${model:-default}   demo: $demo   followup: ${followup:-none}"
+
+  if [ "$wait" = 1 ]; then
+    dim "  waiting for completion (Ctrl-C to detach; the run keeps going)"
+    "$PY" - "$GW_URL" "$run_id" <<'PYEOF'
+import json, sys, time, urllib.request
+
+base, run_id = sys.argv[1], sys.argv[2]
+# The task record is its event list: completion is the arrival of a
+# terminal event (run.end / task.completed), not a wrapper field.
+last_status = None
+while True:
+    try:
+        with urllib.request.urlopen(f"{base}/api/tasks/{run_id}", timeout=5) as r:
+            events = json.load(r).get("events", [])
+    except Exception:
+        time.sleep(2); continue
+    verdict, success, result = "running", None, None
+    for ev in events:
+        name = ev.get("event") or ev.get("kind")
+        if name == "run.end":
+            success = ev.get("success")
+            verdict = "verified" if success else "failed"
+            if ev.get("stop_reason"):
+                verdict = ev.get("stop_reason")
+        elif name == "task.completed":
+            result = ev.get("result") or {}
+            verdict = result.get("status") or verdict
+    if verdict != last_status:
+        print(f"  [{time.strftime('%H:%M:%S')}] {verdict}", flush=True)
+        last_status = verdict
+    if verdict != "running":
+        summary = result or {"success": success}
+        print(json.dumps(summary, indent=2, sort_keys=True)[:2000])
+        sys.exit(0 if (success or verdict == "verified") else 1)
+    time.sleep(2)
+PYEOF
+  else
+    dim "  watch:   foreman runs · foreman tui · $GW_URL/"
+  fi
+}
+
+cmd_followup() {
+  [ $# -ge 2 ] || die "usage: foreman followup RUN_ID \"message\""
+  local rid="$1" msg="$2" prior_repo="" demo="0"
+  ensure_services
+  # Resolve the prior session's repo (and demo flag) so a follow-up
+  # continues THAT conversation — never the caller's CWD (the launcher's
+  # own repo is not a valid target).
+  read -r prior_repo demo < <("$PY" - "$GW_URL" "$rid" <<'PYEOF'
+import json, sys, urllib.request
+
+try:
+    with urllib.request.urlopen(f"{sys.argv[1]}/api/tasks/{sys.argv[2]}", timeout=5) as r:
+        events = json.load(r).get("events", [])
+except Exception:
+    sys.exit(0)
+repo, demo = "", "0"
+for ev in events:
+    if (ev.get("event") or ev.get("kind")) in ("run.meta", "run.start"):
+        repo = ev.get("repo_root") or repo
+        if ev.get("demo"):
+            demo = "1"
+print(repo, demo)
+PYEOF
+)
+  [ -n "$prior_repo" ] || die "prior run $rid not found at the gateway"
+  local demo_flag=()
+  [ "$demo" = 1 ] && demo_flag=(--demo)
+  cmd_run "$msg" --repo "$prior_repo" --followup "$rid" "${demo_flag[@]}"
+}
+
+cmd_cancel() {
+  local rid="${1:-}"
+  [ -n "$rid" ] || die "usage: foreman cancel RUN_ID"
+  ensure_services
+  api_post "$GW_URL/api/runs/$rid/cancel" '{}'
+  ok "cancel requested for $rid"
+}
+
+cmd_runs() {
+  ensure_services
+  "$PY" - "$GW_URL" <<'PYEOF'
+import json, sys, urllib.request
+
+with urllib.request.urlopen(sys.argv[1] + "/api/runs", timeout=5) as r:
+    runs = json.load(r).get("runs", [])
+if not runs:
+    print("no sessions yet — start one: foreman run \"issue\" --repo PATH")
+for r in runs:
+    mark = {"verified": "✔", "failed": "✘", "running": "…", "cancelled": "■"}.get(r.get("status", ""), " ")
+    print(f"{mark} {r.get('run_id','?')[:12]}  {(r.get('title') or '')[:52]:<52}  "
+          f"[{r.get('model_profile') or 'default'}] {r.get('status','?')}")
+PYEOF
+}
+
+# -------------------------------------------------------------- projects ----
+
+cmd_projects() {
+  ensure_services
+  case "${1:-list}" in
+    list)
+      "$PY" - "$GW_URL" <<'PYEOF'
+import json, sys, urllib.request
+
+with urllib.request.urlopen(sys.argv[1] + "/api/projects", timeout=5) as r:
+    data = json.load(r)
+projects = data.get("projects", [])
+if not projects:
+    print("no projects registered — add one: foreman projects add ~/code/my-app")
+for p in projects:
+    active = p.get("active_run")
+    if active:
+        state = f"RUNNING {str(active.get('run_id'))[:8]}"
+    elif p.get("git") and p.get("dirty"):
+        state = "git: dirty"
+    elif p.get("git"):
+        state = f"git: {p.get('branch') or '-'}"
+    else:
+        state = "no git"
+    print(f"{p.get('id','?')[:10]:<10}  {(p.get('name') or '')[:24]:<24}  "
+          f"{p.get('path','')[:44]:<44}  {state}")
+PYEOF
+      ;;
+    add)
+      [ -n "${2:-}" ] || die "usage: foreman projects add PATH [NAME]"
+      api_post "$GW_URL/api/projects" "{\"path\": \"$2\"}" && ok "registered: $2"
+      ;;
+    rm|remove)
+      [ -n "${2:-}" ] || die "usage: foreman projects remove ID"
+      curl -sf -m 10 -X DELETE "$GW_URL/api/projects/$2" >/dev/null && ok "removed: $2"
+      ;;
+    *) die "unknown projects subcommand: $1 (list|add|rm)" ;;
+  esac
+}
+
+cmd_models() {
+  ensure_services
+  "$PY" - "$GW_URL" <<'PYEOF'
+import json, sys, urllib.request
+
+with urllib.request.urlopen(sys.argv[1] + "/api/models", timeout=5) as r:
+    data = json.load(r)
+profiles = data.get("profiles", [])
+default = data.get("default_profile", "default")
+for p in profiles:
+    star = "*" if p.get("profile") == default else " "
+    print(f"{star} {p.get('profile','?'):<14} {p.get('provider','?'):<18} {p.get('model','?')}")
+print(f"  ({default} is the default profile; select per run: --model <name>)")
+PYEOF
+}
+
+# ------------------------------------------------------------------ logs ----
+
+cmd_logs() {
+  local which="${1:-orchestrator}" n="${3:-40}"
+  case "$which" in
+    orch|orchestrator) [ -f "$ORCH_LOG" ] && tail -n "$n" "$ORCH_LOG" || dim "(no orchestrator log yet)" ;;
+    gw|gateway)        [ -f "$GW_LOG" ]  && tail -n "$n" "$GW_LOG"  || dim "(no gateway log yet)" ;;
+    journal)           [ -f "$JOURNAL" ] && tail -n "$n" "$JOURNAL" || dim "(no journal yet)" ;;
+    *) die "logs what? orchestrator | gateway | journal" ;;
+  esac
+  return 0
+}
+
+# --------------------------------------------------------------- doctor ----
+
+cmd_doctor() {
+  local probe="${1:-}"
+  local fail=0
+  printf '%sforeman doctor%s\n' "$C_BOLD" "$C_OFF"
+
+  # python venv + harness import
+  if [ -x "$PY" ]; then
+    ok "  python venv      $($PY --version 2>&1)"
+    if "$PY" -c "import harness" 2>/dev/null; then
+      ok "  harness package  importable"
+    else
+      bad "  harness package  NOT importable — run: make setup"
+      fail=1
+    fi
+  else
+    bad "  python venv      missing — run: make setup"
+    fail=1
+  fi
+
+  # config
+  [ -f "$ROOT/harness.yaml" ] && ok "  config           harness.yaml present" \
+                              || { bad "  config           harness.yaml MISSING"; fail=1; }
+
+  # go + binaries
+  if command -v go >/dev/null 2>&1; then
+    ok "  go toolchain     $(go version | cut -d' ' -f3)"
+  else
+    dim "  go toolchain     not found (cockpits need it: make gateway tui-go)"
+  fi
+  [ -x "$GW_BIN" ] && ok "  gateway binary   bin/foreman-gateway" \
+                  || dim "  gateway binary   not built (make gateway)"
+  [ -x "$TUI_BIN" ] && ok "  tui binary       bin/foreman-tui" \
+                  || dim "  tui binary       not built (make tui-go)"
+
+  # key material (presence only — never print values)
+  if [ -n "${AI_API_KEY:-}" ]; then ok "  model key        AI_API_KEY set in env"
+  else dim "  model key        AI_API_KEY not set (demo mode still works: foreman start --demo)"
+  fi
+
+  # services
+  orch_up && ok "  orchestrator     :$ORCH_PORT healthy" || dim "  orchestrator     not running (foreman start)"
+  gw_up   && ok "  gateway          :$GW_PORT healthy"   || dim "  gateway          not running (foreman start)"
+
+  # upstream doctor (config validation etc.)
+  if [ -x "$PY" ]; then
+    dim "  >> harness doctor:"
+    "$PY" -m harness doctor ${probe:+--probe-model} || fail=1
+  fi
+
+  [ "$fail" = 0 ] && ok "verdict: healthy" || bad "verdict: issues found"
+  exit "$fail"
+}
+
+# ------------------------------------------------------------------ main ----
+
+case "${1:-}" in
+  start)   shift; cmd_start "$@" ;;
+  stop)    cmd_stop ;;
+  restart) shift; cmd_stop; cmd_start "$@" ;;
+  status)  cmd_status ;;
+  tui)     cmd_tui ;;
+  web)     cmd_web ;;
+  run)     shift; cmd_run "$@" ;;
+  followup) shift; cmd_followup "$@" ;;
+  cancel)  shift; cmd_cancel "$@" ;;
+  runs)    cmd_runs ;;
+  projects) shift; cmd_projects "$@" ;;
+  models)  cmd_models ;;
+  logs)    shift; cmd_logs "$@" ;;
+  doctor)  shift; cmd_doctor "$@" ;;
+  -h|--help|help|"") usage ;;
+  *) bad "unknown command: $1"; usage; exit 1 ;;
+esac

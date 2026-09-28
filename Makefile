@@ -5,7 +5,7 @@ VENV := .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: setup run gui dashboard test bench-tokens clean lint typecheck gateway tui-go compose-up compose-down
+.PHONY: setup run gui dashboard test bench-tokens clean lint typecheck gateway tui-go compose-up compose-down build install
 
 setup:
 	@echo ">> Setting up environment..."
@@ -25,6 +25,20 @@ gui:
 	$(PYTHON) -m harness gui
 
 dashboard: gui
+
+# --- Foreman launcher (the product surface: start/stop/status/tui/web/run) ---
+# Build both Go binaries without starting anything.
+build:
+	cd gateway && go build -o ../bin/foreman-gateway .
+	cd gateway && go build -o ../bin/foreman-tui ./cmd/tui
+	@echo ">> built bin/foreman-gateway + bin/foreman-tui"
+
+# Put `foreman` on PATH (idempotent; only touches the user's local bin).
+install: build
+	@mkdir -p $(HOME)/.local/bin
+	@ln -sf $(CURDIR)/bin/foreman $(HOME)/.local/bin/foreman
+	@echo ">> installed: ~/.local/bin/foreman -> $(CURDIR)/bin/foreman"
+	@echo ">> try: foreman doctor && foreman start --demo && foreman web"
 
 test:
 	$(PYTHON) -m pytest

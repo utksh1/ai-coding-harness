@@ -1861,6 +1861,7 @@ function sessGlyph(status) {
     case 'running': return ['▶', 'st-running'];
     case 'verified': return ['✓', 'st-verified'];
     case 'failed': return ['✕', 'st-failed'];
+    case 'cancelled': return ['■', 'st-interrupted'];
     default: return ['•', 'st-interrupted'];
   }
 }

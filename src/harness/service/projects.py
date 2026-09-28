@@ -11,6 +11,7 @@ run history possible.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -21,7 +22,13 @@ from harness.infrastructure.logging import get_logger
 logger = get_logger(__name__)
 
 PROJECTS_FILE = Path(".harness") / "projects.json"
-"""Registry location (relative to the orchestrator's working directory)."""
+"""Registry location (relative to the orchestrator's working directory).
+
+`HARNESS_PROJECTS_FILE` overrides it — the deployer's knob for placing the
+registry on a shared volume, AND the test suite's hermetic isolation: pytest
+shares the repo-root CWD with a running `foreman start`, whose live registry
+sits exactly at the default path.
+"""
 
 PROJECTS_MAX = 64
 """Cap on registered projects: a cockpit picker, not a warehouse."""
@@ -44,7 +51,10 @@ class ProjectStore:
     """
 
     def __init__(self, path: Path | None = None) -> None:
-        self._path = path if path is not None else PROJECTS_FILE
+        if path is None:
+            override = os.environ.get("HARNESS_PROJECTS_FILE")
+            path = Path(override) if override else PROJECTS_FILE
+        self._path = path
 
     # -- persistence ------------------------------------------------------
     def _load(self) -> dict[str, dict[str, Any]]:
@@ -63,9 +73,7 @@ class ProjectStore:
     def _save(self, registry: dict[str, dict[str, Any]]) -> None:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(
-                json.dumps(registry, sort_keys=True, indent=2), encoding="utf-8"
-            )
+            self._path.write_text(json.dumps(registry, sort_keys=True, indent=2), encoding="utf-8")
         except OSError as exc:
             logger.warning("project registry save failed", error=str(exc)[:200])
 
@@ -98,7 +106,11 @@ class ProjectStore:
         while len(registry) > PROJECTS_MAX:
             registry.pop(next(iter(registry)))
         self._save(registry)
-        return self.detail(project_id) or {"id": project_id, "name": project_name, "path": str(path)}
+        return self.detail(project_id) or {
+            "id": project_id,
+            "name": project_name,
+            "path": str(path),
+        }
 
     def unregister(self, project_id: str) -> bool:
         registry = self._load()

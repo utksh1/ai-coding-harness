@@ -96,9 +96,7 @@ the verdict, the summary, and what changed; not enough to smuggle a whole
 patch into the prompt."""
 
 
-def _followup_context(
-    run_roots: dict[str, str], followup_of: str, results_dir: str
-) -> str | None:
+def _followup_context(run_roots: dict[str, str], followup_of: str, results_dir: str) -> str | None:
     """Build the continuation block for a follow-up run.
 
     Reads the prior run's evidence pack (summary.md + patch.diff + the
@@ -124,15 +122,19 @@ def _followup_context(
             evidence_found = True
             parts.append(
                 "Previous run summary (what was done, what was left):\n"
-                + summary[:FOLLOWUP_CONTEXT_MAX_CHARS // 2]
+                + summary[: FOLLOWUP_CONTEXT_MAX_CHARS // 2]
             )
     except OSError:
         pass
     try:
         diff = (pack_dir / "patch.diff").read_text(encoding="utf-8")
         files = sum(1 for line in diff.splitlines() if line.startswith("diff --git "))
-        additions = sum(1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
-        deletions = sum(1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---"))
+        additions = sum(
+            1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")
+        )
+        deletions = sum(
+            1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---")
+        )
         if files:
             evidence_found = True
             parts.append(
@@ -204,7 +206,9 @@ def _service_provider_factory(effective_demo: bool) -> Any:
     if effective_demo:
         from harness.infrastructure.model_providers.fake import build_demo_provider
 
-        def _demo_factory(model_cfg: Any, role: str | None = None, agent_id: str | None = None) -> Any:
+        def _demo_factory(
+            model_cfg: Any, role: str | None = None, agent_id: str | None = None
+        ) -> Any:
             return build_demo_provider(model_cfg, role=role)
 
         return _demo_factory
@@ -576,7 +580,13 @@ def create_app(
                     },
                 )
                 publisher.publish(
-                    run_id, {"event": "run.end", "run_id": run_id, "success": False, "stop_reason": "cancelled"}
+                    run_id,
+                    {
+                        "event": "run.end",
+                        "run_id": run_id,
+                        "success": False,
+                        "stop_reason": "cancelled",
+                    },
                 )
                 return {
                     "run_id": run_id,

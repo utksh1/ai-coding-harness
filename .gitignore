@@ -28,7 +28,8 @@ logs/
 # OS
 .DS_Store
 
-# Go build artifacts
+# Go build artifacts (bin/*, not bin/: the launcher script must stay tracked)
 gateway/gateway
 gateway/cmd/tui/tui-go
-bin/
+bin/*
+!bin/foreman

@@ -33,7 +33,14 @@ Tracer = Callable[[dict[str, Any]], None]
 
 
 NON_CODE_SPECIALTIES = frozenset(
-    {"verification", "code-review", "localization", "code-navigation", "coordination", "architecture"}
+    {
+        "verification",
+        "code-review",
+        "localization",
+        "code-navigation",
+        "coordination",
+        "architecture",
+    }
 )
 """Specialties whose subtasks plausibly produce analysis, not edits. Every
 other specialty (backend-api, database, frontend, refactoring, security,
@@ -323,10 +330,7 @@ class VerificationPipeline:
                 if regressions:
                     passed = False
                     detail = f"baseline regressions: {', '.join(regressions[:5])}"
-                elif (
-                    baseline.reproduction_test
-                    and baseline.reproduction_failing_before is False
-                ):
+                elif baseline.reproduction_test and baseline.reproduction_failing_before is False:
                     # Reproduction invariant: a test that already passed at
                     # baseline proves nothing about the patch. VERIFIED
                     # requires FAIL-before -> PASS-after, not PASS -> PASS.
@@ -467,9 +471,7 @@ def stage_report(results: list[StageResult]) -> str:
             lines.append(f"### {result.name} evidence")
             lines.append("```json")
             lines.append(
-                _sanitize_timing(
-                    json.dumps(result.evidence, indent=2, sort_keys=True, default=str)
-                )
+                _sanitize_timing(json.dumps(result.evidence, indent=2, sort_keys=True, default=str))
             )
             lines.append("```")
     overall = all(r.passed for r in results if r.blocking)

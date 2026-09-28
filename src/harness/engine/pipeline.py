@@ -100,9 +100,7 @@ class HarnessPipeline:
         # explicitly injected `provider` (tests, demo) overrides every binding;
         # `provider_factory` builds one provider instance PER AGENT (parallel
         # waves need providers that share no state).
-        self._model_profile = (
-            model_profile if model_profile in config.models else "default"
-        )
+        self._model_profile = model_profile if model_profile in config.models else "default"
         # An injected provider (tests, demo) overrides every binding: any
         # supplied factory is ignored so the injection is never bypassed.
         self._provider_factory = provider_factory if provider is None else None
@@ -135,7 +133,9 @@ class HarnessPipeline:
             return agent_model
         return self._model_profile if self._model_profile in self._config.models else "default"
 
-    def _provider_for(self, profile: str, role: str | None = None, agent_id: str | None = None) -> Any:
+    def _provider_for(
+        self, profile: str, role: str | None = None, agent_id: str | None = None
+    ) -> Any:
         """One provider instance per AGENT (review finding #11 prerequisite).
 
         Real providers are stateless, so per-agent instances cost nothing and
@@ -689,7 +689,9 @@ class HarnessPipeline:
                     for slot in self._specialist_slots
                     if slot.agent_id != agent_id and slot.agent_id not in self._coordination_ids
                 ]
-                ranked = rank_specialists(task, candidates, team_average_tokens=self._team_average())
+                ranked = rank_specialists(
+                    task, candidates, team_average_tokens=self._team_average()
+                )
                 target = self._agents.get(ranked[0][0].agent_id) if ranked else None
                 if target is None:
                     # No scoreable slot: any non-coordination agent beats

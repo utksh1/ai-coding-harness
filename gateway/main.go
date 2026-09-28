@@ -621,6 +621,7 @@ func (g *Gateway) summarizeRunLocked(runID string, events []json.RawMessage) run
 			FollowupOf   string         `json:"followup_of"`
 			CreatedAt    string         `json:"created_at"`
 			Success      bool           `json:"success"`
+			StopReason   string         `json:"stop_reason"`
 			Result       map[string]any `json:"result"`
 		}
 		if json.Unmarshal(raw, &probe) != nil {
@@ -649,18 +650,29 @@ func (g *Gateway) summarizeRunLocked(runID string, events []json.RawMessage) run
 			summary.Status = "verified"
 			if !probe.Success {
 				summary.Status = "failed"
+				// An operator stop is a third state, not a failure: the run
+				// was healthy work that was interrupted on purpose.
+				if probe.StopReason == "cancelled" {
+					summary.Status = "cancelled"
+				}
 			}
 		case "task.completed":
 			if probe.Result != nil {
+				if outcome, ok := probe.Result["outcome"].(string); ok {
+					summary.Outcome = outcome
+					// run.end may already have marked the run
+					// cancelled; the completion event arrives
+					// later and must not downgrade it to failed.
+					if strings.Contains(strings.ToUpper(outcome), "CANCELLED") {
+						summary.Status = "cancelled"
+					}
+				}
 				if success, ok := probe.Result["success"].(bool); ok {
 					if success {
 						summary.Status = "verified"
-					} else {
+					} else if summary.Status != "cancelled" {
 						summary.Status = "failed"
 					}
-				}
-				if outcome, ok := probe.Result["outcome"].(string); ok {
-					summary.Outcome = outcome
 				}
 			}
 		case "run.failed":

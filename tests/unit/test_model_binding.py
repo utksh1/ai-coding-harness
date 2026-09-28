@@ -23,10 +23,26 @@ def _config(agent_models: dict[str, str]) -> HarnessConfig:
                 "cheap": {"provider": "fake", "name": "fake-cheap"},
             },
             "agents": [
-                {"agent_id": "arch-1", "role": "architect", "model": agent_models.get("arch-1", "default")},
-                {"agent_id": "mgr-1", "role": "manager", "model": agent_models.get("mgr-1", "default")},
-                {"agent_id": "impl-1", "role": "implementer", "model": agent_models.get("impl-1", "default")},
-                {"agent_id": "ver-1", "role": "verifier", "model": agent_models.get("ver-1", "default")},
+                {
+                    "agent_id": "arch-1",
+                    "role": "architect",
+                    "model": agent_models.get("arch-1", "default"),
+                },
+                {
+                    "agent_id": "mgr-1",
+                    "role": "manager",
+                    "model": agent_models.get("mgr-1", "default"),
+                },
+                {
+                    "agent_id": "impl-1",
+                    "role": "implementer",
+                    "model": agent_models.get("impl-1", "default"),
+                },
+                {
+                    "agent_id": "ver-1",
+                    "role": "verifier",
+                    "model": agent_models.get("ver-1", "default"),
+                },
             ],
             "storage": {"backend": "memory"},
         }

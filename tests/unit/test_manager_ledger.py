@@ -68,7 +68,9 @@ def work_repo(tmp_path: Path) -> Path:
     repo.mkdir()
     (repo / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
     (repo / "app.py").write_text("def greet():\n    return 'hello'\n")
-    (repo / "test_app.py").write_text("from app import greet\n\ndef test_ok():\n    assert greet()\n")
+    (repo / "test_app.py").write_text(
+        "from app import greet\n\ndef test_ok():\n    assert greet()\n"
+    )
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
     subprocess.run(

@@ -269,3 +269,53 @@ func readWSJSON(t *testing.T, conn *websocket.Conn) map[string]any {
 	}
 	return payload
 }
+
+func TestRunsListMarksCancelledDistinctly(t *testing.T) {
+	// An operator stop is a third terminal state. run.end(stop_reason=
+	// "cancelled") and the later task.completed(outcome "CANCELLED: ...")
+	// must both land on "cancelled" — not "failed", and the completion
+	// event must not downgrade it.
+	gateway := NewGateway(testConfig(), nil)
+	gateway.storeEvent(mustJSON(map[string]any{
+		"event": "run.meta", "run_id": "rc", "title": "long run",
+		"issue_preview": "long run", "created_at": "2026-01-01T00:00:00Z",
+	}))
+	gateway.storeEvent(mustJSON(map[string]any{
+		"event": "run.failed", "run_id": "rc", "error": "CANCELLED by user",
+	}))
+	gateway.storeEvent(mustJSON(map[string]any{
+		"event": "run.end", "run_id": "rc", "success": false,
+		"stop_reason": "cancelled",
+	}))
+	gateway.storeEvent(mustJSON(map[string]any{
+		"event": "task.completed", "run_id": "rc",
+		"result": map[string]any{
+			"success": false, "flags": []string{"cancelled"},
+			"outcome": "CANCELLED: run stopped by user",
+		},
+	}))
+
+	server := httptest.NewServer(gateway.Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/runs")
+	if err != nil {
+		t.Fatalf("runs list failed: %v", err)
+	}
+	defer response.Body.Close()
+	var body struct {
+		Runs []runSummary `json:"runs"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if len(body.Runs) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(body.Runs))
+	}
+	if body.Runs[0].Status != "cancelled" {
+		t.Fatalf("cancelled run should report status 'cancelled', got %q", body.Runs[0].Status)
+	}
+	if !strings.Contains(body.Runs[0].Outcome, "CANCELLED") {
+		t.Fatalf("outcome should carry the honest stop reason, got %q", body.Runs[0].Outcome)
+	}
+}

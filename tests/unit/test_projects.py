@@ -8,6 +8,9 @@ follow-up context injection, and /agent/cancellation of a live run.
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -69,6 +72,35 @@ def test_register_two_same_named_dirs_get_distinct_ids(tmp_path: Path) -> None:
 def test_unregister_unknown_is_false(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path / "projects.json")
     assert store.unregister("ghost") is False
+
+
+def test_env_var_relocates_the_registry(tmp_path: Path) -> None:
+    """HARNESS_PROJECTS_FILE is the deployer's knob AND the hermetic-tests knob.
+
+    A CWD-relative default means a running `foreman start` and a pytest run in
+    the same checkout would share one registry file; the override must move
+    BOTH the default construction path and stay per-instance explicit-path.
+    """
+    repo = tmp_path / "relocated"
+    repo.mkdir()
+    relocated = tmp_path / "state" / "projects.json"
+    relocated.parent.mkdir()
+    env = {**os.environ, "HARNESS_PROJECTS_FILE": str(relocated)}
+    code = (
+        "from pathlib import Path; "
+        "from harness.service.projects import ProjectStore; "
+        f"ProjectStore().register({str(repo)!r}, 'Relocated'); "
+        "print(ProjectStore().get('relocated') is not None)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == "True"
+    assert relocated.exists()
+    # Explicit path still wins over the environment.
+    explicit = tmp_path / "explicit.json"
+    ProjectStore(explicit).register(str(repo), "Explicit")
+    assert explicit.exists() and not ProjectStore(explicit).get("relocated")
 
 
 def test_persistence_across_instances(tmp_path: Path) -> None:
@@ -237,7 +269,9 @@ def test_run_with_unknown_model_profile_falls_back(repo: Path, fake_model_config
 def test_two_profiles_use_distinct_pipelines(repo: Path, fake_model_config: Any) -> None:
     """Profile participates in the pipeline cache key: two profiles on one
     repo are two agent sets, and both runs complete (looping script)."""
-    app = create_app(config=_config_two_profiles(), provider=_scripted(fake_model_config, loop=True))
+    app = create_app(
+        config=_config_two_profiles(), provider=_scripted(fake_model_config, loop=True)
+    )
     client = TestClient(app)
     for profile in ("default", "alt"):
         response = client.post(
@@ -400,9 +434,7 @@ def test_git_project_enrichment(tmp_path: Path) -> None:
     repo = tmp_path / "gitrepo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "-C", str(repo), "config", "user.email", "t@example.com"], check=True
-    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@example.com"], check=True)
     subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
     (repo / "f.py").write_text("x=1\n")
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
@@ -420,7 +452,9 @@ def test_git_project_enrichment(tmp_path: Path) -> None:
     assert detail["changed_files"] == 1
 
 
-def test_git_state_survives_missing_git_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_git_state_survives_missing_git_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from harness.service.projects import _git_state
 
     repo = tmp_path / "g"
@@ -438,8 +472,7 @@ def test_run_verdict_parses_malformed_lines(tmp_path: Path) -> None:
     pack = tmp_path / "p"
     pack.mkdir()
     (pack / "events.jsonl").write_text(
-        "not-json\n"
-        '{"event": "budget.exhausted", "run_id": "p"}\n',
+        'not-json\n{"event": "budget.exhausted", "run_id": "p"}\n',
         encoding="utf-8",
     )
     assert _run_verdict(pack) == "STOPPED"

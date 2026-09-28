@@ -25,6 +25,19 @@ from harness.infrastructure.github import GitHubService
 from harness.infrastructure.model_providers.fake import FakeProvider
 
 
+@pytest.fixture(autouse=True)
+def hermetic_project_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the ProjectStore sidecar from the operator's live registry.
+
+    The store's default path is CWD-relative (`.harness/projects.json`), which
+    is exactly where a running `foreman start` keeps the real registry — and
+    pytest shares that CWD. Without this redirect, any service-level test that
+    touches /api/projects would read (and fail against) the operator's live
+    project list.
+    """
+    monkeypatch.setenv("HARNESS_PROJECTS_FILE", str(tmp_path / "projects.json"))
+
+
 @pytest.fixture
 def memory_store() -> MemoryContextStore:
     return MemoryContextStore()

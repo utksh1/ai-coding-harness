@@ -25,6 +25,48 @@ make lint     # ruff (black/flake8-compatible) + mypy type check
 
 Enable lint-on-commit hooks once: `pip install pre-commit && pre-commit install`.
 
+## The `foreman` launcher (the product surface)
+
+One command drives the whole platform — services, cockpits, projects, and
+chat-style runs. After `make setup && make install`, `foreman` is on PATH:
+
+```bash
+make install          # builds the Go cockpit binaries + links ~/.local/bin/foreman
+
+foreman doctor        # environment + service diagnostics (honest, exit-coded)
+foreman start --demo  # orchestrator :8000 + gateway :8080, daemonized & supervised
+                      #   --demo runs scripted model responses — no API key needed
+foreman web           # the web cockpit (chat sessions, org tree, gates, diff)
+foreman tui           # the Go TUI cockpit (same contract, in the terminal)
+
+foreman projects add ~/code/my-app        # register a repo (git state enriched)
+foreman run "fix the off-by-one in parser" --repo ~/code/my-app --model luna
+                      # submits a run through the gateway; prints the run id
+                      #   --wait    block until the verdict event
+                      #   --demo    scripted responses (offline demonstration)
+foreman followup <RUN_ID> "now add tests" # continue THAT session: prior summary
+                      #   + patch footprint prepended, same repo, chat-style
+foreman cancel <RUN_ID>                   # honest stop: run.end(stop_reason=cancelled)
+foreman runs           # session list (✔ verified · ✘ failed · ■ cancelled · ▶ running)
+foreman status         # health, versions, journal size, live session summary
+foreman logs gateway   # tail service logs (orchestrator | gateway | journal)
+foreman stop           # graceful stop (SIGTERM → escalate → orphan sweep)
+```
+
+Operational guarantees baked into the launcher (each from a real incident):
+
+- **Services survive the launching shell** — daemons are `setsid -f` with
+  pid files written by the daemon itself, so a closed terminal (or a
+  crashed launcher) never orphans a run mid-flight.
+- **The session list survives restarts** — the gateway journals every event
+  (`logs/gateway-events.jsonl`, 50 MiB rotation) and replays on boot; after
+  `foreman restart`, `foreman runs` shows every session with its verdict.
+- **One run per repo at a time** — the admission guard rejects concurrent
+  pipelines on one working tree (interleaved edits corrupted a live run once).
+- **Stops are honest** — cancel emits `run.failed("CANCELLED by user")` +
+  `run.end(success=false, stop_reason="cancelled")` + a `cancelled` session
+  state, never a silent drop or a fake failure.
+
 ### Model providers
 
 `harness.yaml` holds named model profiles; agents reference them by key, so a
@@ -52,9 +94,12 @@ trips first and finalizes honestly with a `budget.exhausted` event).
 ## Platform layer (beyond the hackathon — epic #69)
 
 The engine is a clean importable library, so the multi-service platform from
-`TECHNICAL_IMPLEMENTATION.md` wraps it without touching the graded core:
+`TECHNICAL_IMPLEMENTATION.md` wraps it without touching the graded core.
+**`foreman` (above) is the intended entry point** — the targets below are the
+unpackaged equivalents, useful in CI and development:
 
 ```bash
+make build          # build both Go binaries without starting anything
 make gateway        # Go API gateway (:8080) — proxies to the orchestrator, WS broadcast
 make tui-go         # Go TUI cockpit (Bubble Tea) consuming the gateway
 make go-test        # Go unit tests
