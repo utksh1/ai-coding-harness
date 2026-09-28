@@ -262,6 +262,8 @@ func (m model) renderMainContent(innerW, innerH int) string {
 		body = m.renderInputModal(innerW, innerH-2)
 	} else {
 		switch m.activeTab {
+		case tabRuns:
+			body = m.renderRunsTab(innerW, innerH-4)
 		case tabPlan:
 			body = m.renderPlanTab(innerW)
 		case tabAgent:
@@ -283,6 +285,7 @@ func (m model) renderMainContent(innerW, innerH int) string {
 func (m model) renderTabBar(innerW int) string {
 	s := m.state
 	counts := []string{
+		fmt.Sprint(len(m.runs)),
 		fmt.Sprint(len(s.TaskOrder())),
 		"",
 		fmt.Sprint(len(s.Activity)),
@@ -679,36 +682,113 @@ func (m model) renderDiffTab(innerW int) []string {
 
 func (m model) renderInputModal(innerW, innerH int) []string {
 	var lines []string
-	lines = append(lines, truncWidth(sectionStyle.Render("LAUNCH NEW TASK"), innerW), "")
+	header := "LAUNCH NEW TASK"
+	if m.inputKind == "followup" {
+		header = "FOLLOW-UP SESSION · " + shortRun(m.followupOf)
+	}
+	lines = append(lines, truncWidth(sectionStyle.Render(header), innerW), "")
 
-	cur0, cur1 := "  ", "  "
-	if m.inputField == 0 {
-		cur0 = blueStyle.Render("> ")
-	} else {
-		cur1 = blueStyle.Render("> ")
+	cursors := make([]string, 3)
+	for i := range cursors {
+		cursors[i] = "  "
+	}
+	if m.inputField >= 0 && m.inputField < 3 {
+		cursors[m.inputField] = blueStyle.Render("> ")
 	}
 	issue := truncWidth(m.issueInput, max(1, innerW-16))
 	repo := truncWidth(m.repoInput, max(1, innerW-16))
-	lines = append(lines, truncWidth(cur0+midStyle.Render("issue: ")+textStyle.Render(issue), innerW))
-	lines = append(lines, truncWidth(cur1+midStyle.Render("repo:  ")+textStyle.Render(repo), innerW))
+	profile := "(default)"
+	hint := ""
+	if m.modelCursor >= 0 && m.modelCursor < len(m.models) {
+		mp := m.models[m.modelCursor]
+		profile = fmt.Sprintf("%s · %s", mp.Profile, mp.Model)
+		hint = fmt.Sprintf("  %d/%d profiles", m.modelCursor+1, len(m.models))
+	}
+	lines = append(lines, truncWidth(cursors[0]+midStyle.Render("issue: ")+textStyle.Render(issue), innerW))
+	lines = append(lines, truncWidth(cursors[1]+midStyle.Render("repo:  ")+textStyle.Render(repo), innerW))
+	if n := len(m.projects); n > 0 && m.projectCursor < n {
+		lines = append(lines, truncWidth(
+			"    "+dimStyle.Render(fmt.Sprintf("project %d/%d · [↑/↓] cycle", m.projectCursor+1, n)), innerW))
+	}
+	lines = append(lines, truncWidth(cursors[2]+midStyle.Render("model: ")+textStyle.Render(profile)+dimStyle.Render(hint), innerW))
 	lines = append(lines, "")
-	lines = append(lines, dimStyle.Render(" [tab] switch field · [enter] launch · [esc] cancel"))
-	lines = append(lines, dimStyle.Render(" POST /api/tasks {issue, repo_root} — streamed events follow"))
+	lines = append(lines, dimStyle.Render(" [tab] field · [↑/↓] pick · [enter] launch · [esc] cancel"))
+	lines = append(lines, dimStyle.Render(" POST /api/tasks {issue, repo_root, model_profile, followup_of}"))
 	return lines
+}
+
+// renderRunsTab is the chat session list: status glyph, title, id, outcome.
+func (m model) renderRunsTab(innerW, innerH int) []string {
+	var lines []string
+	if m.replay != nil {
+		lines = append(lines, dimStyle.Render(" sessions disabled in replay mode"))
+		return lines
+	}
+	if m.runsStatus != "" {
+		lines = append(lines, errStyle.Render(" runs: "+m.runsStatus))
+		return lines
+	}
+	if len(m.runs) == 0 {
+		lines = append(lines, dimStyle.Render(" no sessions yet — press [n] to start one"))
+		return lines
+	}
+	lines = append(lines, truncWidth(sectionStyle.Render(fmt.Sprintf("SESSIONS (%d)", len(m.runs))), innerW), "")
+	for i, run := range m.runs {
+		glyph, style := "•", dimStyle
+		switch run.Status {
+		case "running":
+			glyph, style = "▶", warnStyle
+		case "verified":
+			glyph, style = "✓", okStyle
+		case "failed":
+			glyph, style = "✗", errStyle
+		}
+		marker := " "
+		if i == m.runsCursor {
+			marker = blueStyle.Render("▸")
+		}
+		title := truncWidth(run.Title, max(10, innerW-46))
+		right := fmt.Sprintf("%s %s", style.Render(glyph), dimStyle.Render(shortRun(run.RunID)))
+		if run.ModelProfile != "" {
+			right += dimStyle.Render(" · " + run.ModelProfile)
+		}
+		if run.FollowupOf != "" {
+			right += dimStyle.Render(" ↩")
+		}
+		lines = append(lines, truncWidth(
+			fmt.Sprintf("%s %s %s", marker, textStyle.Render(title), right), innerW))
+		if i == m.runsCursor {
+			detail := run.IssuePreview
+			if detail == "" {
+				detail = run.Outcome
+			}
+			if detail != "" {
+				lines = append(lines, truncWidth("    "+dimStyle.Render(detail), innerW))
+			}
+			meta := run.RepoRoot
+			if meta != "" {
+				lines = append(lines, truncWidth("    "+dimStyle.Render(meta), innerW))
+			}
+		}
+	}
+	return windowLines(lines, max(1, innerH))
 }
 
 // ---------------------------------------------------------------------------
 // Footer
 
 func (m model) renderFooter() string {
-	keys := "[1-5] tabs · [t] tree · [↑/↓/↵] agent · [n] new · [r] reconnect · [q] quit"
+	keys := "[1-6] tabs · [t] tree · [↑/↓/↵] agent · [n] new · [r] recon · [q] quit"
+	if m.activeTab == tabRuns {
+		keys = "[↑/↓] session · [↵] open · [f] follow-up · [x] stop · [d] delete · [n] new · [q] quit"
+	}
 	if m.replay != nil {
-		keys = "[1-5] tabs · [t] tree · [↑/↓/↵] agent · [space] pause · [→] step · [q] quit"
+		keys = "[1-6] tabs · [t] tree · [↑/↓/↵] agent · [space] pause · [→] step · [q] quit"
 	}
 	if m.width < 100 {
-		keys = "[1-5] tabs · [t] tree · [n] new · [r] recon · [q] quit"
+		keys = "[1-6] tabs · [t] tree · [n] new · [r] recon · [q] quit"
 		if m.replay != nil {
-			keys = "[1-5] tabs · [t] tree · [space] pause · [→] step · [q] quit"
+			keys = "[1-6] tabs · [t] tree · [space] pause · [→] step · [q] quit"
 		}
 	}
 	focus := ""
