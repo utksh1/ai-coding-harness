@@ -463,7 +463,10 @@ if not projects:
 for p in projects:
     active = p.get("active_run")
     if active:
-        state = f"RUNNING {str(active.get('run_id'))[:8]}"
+        # The orchestrator reports active_run as a bare run_id string;
+        # tolerate an object shape too so either contract renders.
+        rid = active if isinstance(active, str) else str(active.get("run_id", ""))
+        state = f"RUNNING {rid[:8]}"
     elif p.get("git") and p.get("dirty"):
         state = "git: dirty"
     elif p.get("git"):
@@ -475,12 +478,42 @@ for p in projects:
 PYEOF
       ;;
     add)
-      [ -n "${2:-}" ] || die "usage: foreman projects add PATH [NAME]"
-      api_post "$GW_URL/api/projects" "{\"path\": \"$2\"}" && ok "registered: $2"
+      # The API soft-fails with HTTP 200 + {"registered": false, "error": ...}
+      # (e.g. path not a directory) — the body verdict is the truth, not curl's
+      # exit code. NAME is forwarded when given.
+      local add_path="${2:-}" add_name="${3:-}" add_payload add_resp
+      [ -n "$add_path" ] || die "usage: foreman projects add PATH [NAME]"
+      add_payload="$("$PY" -c '
+import json, sys
+print(json.dumps({"path": sys.argv[1], **({"name": sys.argv[2]} if sys.argv[2] else {})}))' \
+        "$add_path" "$add_name")"
+      add_resp="$(api_post "$GW_URL/api/projects" "$add_payload")" \
+        || die "gateway rejected the add (HTTP error — is the orchestrator up?)"
+      if printf '%s' "$add_resp" | "$PY" -c '
+import json, sys
+sys.exit(0 if json.load(sys.stdin).get("registered") else 1)' 2>/dev/null; then
+        ok "registered: $add_path"
+      else
+        die "not registered: $(printf '%s' "$add_resp" | "$PY" -c '
+import json, sys
+print(json.load(sys.stdin).get("error", "unknown error"))' 2>/dev/null || printf '%s' "$add_resp")"
+      fi
       ;;
     rm|remove)
       [ -n "${2:-}" ] || die "usage: foreman projects remove ID"
-      curl -sf -m 10 -X DELETE "$GW_URL/api/projects/$2" >/dev/null && ok "removed: $2"
+      local rm_resp
+      rm_resp="$(curl -s -m 10 -X DELETE "$GW_URL/api/projects/$2")" \
+        || die "gateway rejected the remove (HTTP error)"
+      if printf '%s' "$rm_resp" | "$PY" -c '
+import json, sys
+sys.exit(0 if json.load(sys.stdin).get("removed") else 1)' 2>/dev/null; then
+        ok "removed: $2"
+      else
+        die "not removed: $(printf '%s' "$rm_resp" | "$PY" -c '
+import json, sys
+d = json.load(sys.stdin)
+print(d.get("error") or f"unknown project {sys.argv[1]}")' "$2" 2>/dev/null || printf '%s' "$rm_resp")"
+      fi
       ;;
     *) die "unknown projects subcommand: $1 (list|add|rm)" ;;
   esac

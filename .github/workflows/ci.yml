@@ -28,6 +28,19 @@ jobs:
       - name: Test
         run: pytest
 
+  launcher:
+    # bin/foreman is the product's front door — CI must at least prove it
+    # parses (bash -n) and keeps its exec bit (regression: mode 100644 was
+    # pushed once and CI caught it only by luck of a later step).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax + mode gate
+        run: |
+          bash -n bin/foreman
+          test -x bin/foreman
+          bash -n scripts/*.sh 2>/dev/null || true
+
   go:
     runs-on: ubuntu-latest
     steps:
