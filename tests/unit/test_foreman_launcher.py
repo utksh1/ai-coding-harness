@@ -100,9 +100,10 @@ def test_doctor_reports_even_when_down() -> None:
 
     result = _foreman("doctor", timeout=90)
     assert b"Traceback" not in result.stderr
-    assert b"python venv" in result.stdout
-    # venv exists in this checkout, so the venv line must be an OK line
-    assert b"python venv" in result.stdout
+    # The python line is present whichever interpreter was discovered
+    # (repo .venv, or a PATH python3 as in CI).
+    assert b"python " in result.stdout
+    assert b"verdict:" in result.stdout
 
 
 def test_stop_is_idempotent() -> None:

@@ -29,9 +29,18 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PY="$ROOT/.venv/bin/python"
 GW_BIN="$ROOT/bin/foreman-gateway"
 TUI_BIN="$ROOT/bin/foreman-tui"
+
+# Python discovery: the venv from `make setup` first, then any python3 on
+# PATH (the read-only commands only need the stdlib; the orchestrator needs
+# `harness` importable — doctor checks that separately and says so).
+PY=""
+if [ -x "$ROOT/.venv/bin/python" ]; then
+  PY="$ROOT/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PY="$(command -v python3)"
+fi
 
 # User-level Go installs (the documented local-dev path: ~/.local/go/bin/go)
 # are not always on PATH in fresh shells — discover instead of failing.
@@ -123,7 +132,9 @@ ensure_build() {  # build gateway/TUI binaries when missing or source newer
 cmd_start() {
   local demo=0
   [ "${1:-}" = "--demo" ] && demo=1
-  [ -x "$PY" ] || die "python venv missing — run: make setup"
+  [ -n "$PY" ] || die "no python found (expected .venv from make setup) — run: make setup"
+  "$PY" -c "import harness" 2>/dev/null \
+    || die "harness not importable via $PY — run: make setup"
   mkdir -p "$LOGDIR" "$RUNDIR"
 
   if orch_up && gw_up; then
@@ -511,9 +522,9 @@ cmd_doctor() {
   local fail=0
   printf '%sforeman doctor%s\n' "$C_BOLD" "$C_OFF"
 
-  # python venv + harness import
-  if [ -x "$PY" ]; then
-    ok "  python venv      $($PY --version 2>&1)"
+  # python + harness import
+  if [ -n "$PY" ]; then
+    ok "  python           $($PY --version 2>&1) — $PY"
     if "$PY" -c "import harness" 2>/dev/null; then
       ok "  harness package  importable"
     else
@@ -521,7 +532,7 @@ cmd_doctor() {
       fail=1
     fi
   else
-    bad "  python venv      missing — run: make setup"
+    bad "  python           none found — run: make setup"
     fail=1
   fi
 
