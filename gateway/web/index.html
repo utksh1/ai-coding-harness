@@ -115,6 +115,28 @@ button { font: inherit; cursor: pointer; }
 .mini-btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
 .mini-btn.primary:hover { background: #4d8ef8; }
 
+/* ===================== sessions (chat sidebar) ===================== */
+.sessions { border-bottom: 1px solid var(--line); display: flex; flex-direction: column; max-height: 42%; min-height: 90px; }
+.sessions .pane-title { padding-bottom: 4px; }
+.sessions-list { overflow-y: auto; min-height: 0; padding: 0 6px 8px 2px; }
+.sess-empty { padding: 6px 8px; }
+.sess-row { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 6px; cursor: pointer; border-left: 2px solid transparent; }
+.sess-row:hover { background: var(--surface-2); }
+.sess-row.active { background: var(--surface-2); border-left-color: var(--primary); }
+.sess-glyph { flex: none; width: 14px; text-align: center; font-size: 11px; }
+.sess-glyph.st-running { color: var(--warn); }
+.sess-glyph.st-verified { color: var(--ok-hi); }
+.sess-glyph.st-failed { color: var(--fail-hi); }
+.sess-glyph.st-interrupted { color: var(--dim); }
+.sess-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.sess-acts { flex: none; display: none; gap: 4px; }
+.sess-row:hover .sess-acts, .sess-row.active .sess-acts { display: flex; }
+.sess-acts .mini-btn { padding: 1px 5px; font-size: 10px; }
+.sess-meta { font-size: 10px; color: var(--dim); padding: 0 8px 4px 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sel { width: 100%; background: var(--surface); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 6px; font-size: 12px; margin-bottom: 6px; }
+.followup-bar { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border: 1px dashed var(--conn); border-radius: 6px; padding: 5px 8px; font-size: 11px; margin-bottom: 6px; }
+.followup-bar b { font-family: var(--mono); }
+
 /* ===================== layout ===================== */
 #layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 360px minmax(0, 1fr) 320px; }
 #left-pane { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
@@ -523,6 +545,15 @@ input[type="text"] { font-family: var(--mono); font-size: 11.5px; }
 
   <!-- ============ left: agent hierarchy ============ -->
   <aside id="left-pane" aria-label="agent hierarchy">
+    <div class="sessions" id="sessionsPanel">
+      <div class="pane-title">
+        Sessions <span class="cnt" id="sessCount">0</span>
+        <button class="mini-btn" id="newChatBtn" title="start a fresh session">+ new</button>
+      </div>
+      <div class="sessions-list" id="sessionsList" aria-label="chat sessions">
+        <div class="sess-empty dim-note">loading…</div>
+      </div>
+    </div>
     <div class="pane-title">
       Agent Hierarchy <span class="cnt" id="agentCount">0 agents</span>
       <span class="hint">click a card → workspace</span>
@@ -594,8 +625,16 @@ input[type="text"] { font-family: var(--mono); font-size: 11.5px; }
       <h3>Run Launcher</h3>
       <label class="fld" for="issueInput">Issue</label>
       <textarea id="issueInput" rows="4" placeholder="Describe the issue for the harness to fix…"></textarea>
+      <label class="fld" for="projectSel">project</label>
+      <select id="projectSel" class="sel"><option value="">(repo path below)</option></select>
       <label class="fld" for="repoInput">repo_root</label>
       <input type="text" id="repoInput" value="fixtures/mini-repo" spellcheck="false">
+      <label class="fld" for="modelSel">model profile</label>
+      <select id="modelSel" class="sel"><option value="">default</option></select>
+      <div class="followup-bar" id="followupBar" hidden>
+        <span>↩ continuing <b id="followupRun"></b></span>
+        <button class="mini-btn" id="followupClear" title="detach from the prior session">detach</button>
+      </div>
       <label class="chk" for="demoChk">
         <input type="checkbox" id="demoChk">
         <span>demo mode<span class="why">scripted run — no LLM calls, no repo edits</span></span>
@@ -660,7 +699,14 @@ var S = {
   tab: 'plan',
   selected: null,            // selected agent id
   timelineFollow: true,
-  replay: { data: [], idx: 0, playing: false, timer: null }
+  replay: { data: [], idx: 0, playing: false, timer: null },
+  // Session management (platform P4)
+  sessions: [],              // chat session list from GET /api/runs
+  activeSession: null,       // opened session run_id (highlight in list)
+  pinnedRun: null,           // open-by-id: live events for other runs are skipped
+  followupOf: null,          // launch continues this session
+  projects: [],              // registered projects for the picker
+  models: []                 // model profiles for the picker
 };
 
 /* ======================= tiny helpers ======================= */
@@ -1363,6 +1409,10 @@ function resetRun() {
 function onEvent(ev) {
   if (ev == null || typeof ev !== 'object') ev = { event: 'raw', message: String(ev) };
   ev._ts = ev._ts || Date.now();
+  // Session-list nudge from the gateway: refetch the sidebar (no run_id).
+  if (ev.event === 'runs.changed') { fetchSessions(); return; }
+  // Pinned session: skip live events belonging to OTHER runs.
+  if (S.pinnedRun && ev.run_id && String(ev.run_id) !== S.pinnedRun) return;
   if (ev.run_id) S.runId = String(ev.run_id);
 
   try { dispatch(ev); } catch (err) { console.error('event handler error (event kept in timeline):', err, ev); }
@@ -1805,6 +1855,157 @@ function updateReplayUI() {
   $('replayPos').textContent = (S.replay.idx + ' / ' + total) + (done && total ? ' · END' : '');
 }
 
+/* ======================= sessions (chat sidebar) ======================= */
+function sessGlyph(status) {
+  switch (status) {
+    case 'running': return ['▶', 'st-running'];
+    case 'verified': return ['✓', 'st-verified'];
+    case 'failed': return ['✕', 'st-failed'];
+    default: return ['•', 'st-interrupted'];
+  }
+}
+function fetchSessions() {
+  if (S.mode === 'replay') { renderSessions(); return; }
+  fetch('/api/runs').then(function (r) { return r.json(); }).then(function (body) {
+    S.sessions = (body && body.runs) || [];
+    renderSessions();
+  }).catch(function () {
+    S.sessions = [];
+    renderSessions();
+  });
+}
+function renderSessions() {
+  var list = $('sessionsList');
+  $('sessCount').textContent = String(S.sessions.length);
+  if (!S.sessions.length) {
+    list.innerHTML = '<div class="sess-empty dim-note">no sessions yet — launch a run →</div>';
+    return;
+  }
+  var html = '';
+  S.sessions.forEach(function (run) {
+    var g = sessGlyph(run.status);
+    var active = run.run_id === S.activeSession ? ' active' : '';
+    var title = esc(run.title || run.run_id);
+    var meta = esc((run.repo_root || '') + (run.model_profile ? ' · ' + run.model_profile : ''));
+    var id = esc(run.run_id);
+    html += '<div class="sess-row' + active + '" data-run="' + id + '" title="' + title + '">' +
+        '<span class="sess-glyph ' + g[1] + '">' + g[0] + '</span>' +
+        '<span class="sess-title">' + title + '</span>' +
+        '<span class="sess-acts">' +
+        '<button class="mini-btn" data-act="open" data-run="' + id + '">open</button>' +
+        (run.status === 'running'
+          ? '<button class="mini-btn" data-act="cancel" data-run="' + id + '">■</button>'
+          : '') +
+        '<button class="mini-btn" data-act="rename" data-run="' + id + '">✎</button>' +
+        '<button class="mini-btn" data-act="delete" data-run="' + id + '">🗑</button>' +
+        '</span></div>';
+    if (active) html += '<div class="sess-meta">' + meta + '</div>';
+  });
+  list.innerHTML = html;
+}
+function openSession(runId) {
+  fetch('/api/tasks/' + encodeURIComponent(runId))
+    .then(function (r) { return r.json(); })
+    .then(function (body) {
+      S.pinnedRun = runId;
+      S.activeSession = runId;
+      resetRun();
+      (body && body.events || []).forEach(function (raw) {
+        var ev = null;
+        try { ev = JSON.parse(raw); } catch (e) { /* skip */ }
+        if (ev) onEvent(ev);
+      });
+      renderSessions();
+      setFollowup(runId, null);  // arm follow-up for the opened session
+    })
+    .catch(function (err) { console.warn('open session failed:', err); });
+}
+function newChat() {
+  S.pinnedRun = null;
+  S.activeSession = null;
+  resetRun();
+  S.runId = null; S.runState = 'IDLE';
+  renderSessions();
+  setFollowup(null, null);
+  $('issueInput').focus();
+}
+function renameSession(runId) {
+  var current = '';
+  S.sessions.forEach(function (r) { if (r.run_id === runId) current = r.title || ''; });
+  var title = window.prompt('Rename session', current);
+  if (!title) return;
+  fetch('/api/runs/' + encodeURIComponent(runId), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: title })
+  }).then(fetchSessions);
+}
+function deleteSession(runId) {
+  if (!window.confirm('Delete this session (history removed)?')) return;
+  fetch('/api/runs/' + encodeURIComponent(runId), { method: 'DELETE' })
+    .then(function () {
+      if (S.activeSession === runId) newChat();
+      fetchSessions();
+    });
+}
+function cancelSession(runId) {
+  fetch('/api/runs/' + encodeURIComponent(runId) + '/cancel', { method: 'POST' })
+    .then(function (r) { return r.json(); })
+    .then(function (body) {
+      if (body && body.cancelled === false) console.warn('cancel:', body.detail || body.error);
+      fetchSessions();
+    });
+}
+function setFollowup(runId, repoRoot) {
+  S.followupOf = runId;
+  var bar = $('followupBar');
+  if (!runId) { bar.hidden = true; return; }
+  bar.hidden = false;
+  $('followupRun').textContent = String(runId).slice(0, 8);
+  if (repoRoot) $('repoInput').value = repoRoot;
+}
+function initSessionsUI() {
+  $('sessionsList').addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-act]');
+    var runId = btn ? btn.getAttribute('data-run') : null;
+    if (btn && runId) {
+      e.stopPropagation();
+      var act = btn.getAttribute('data-act');
+      if (act === 'open') openSession(runId);
+      if (act === 'rename') renameSession(runId);
+      if (act === 'delete') deleteSession(runId);
+      if (act === 'cancel') cancelSession(runId);
+      return;
+    }
+    var row = e.target.closest('.sess-row');
+    if (row) openSession(row.getAttribute('data-run'));
+  });
+  $('newChatBtn').addEventListener('click', newChat);
+  $('followupClear').addEventListener('click', function () { setFollowup(null, null); });
+  // Pickers: projects + model profiles.
+  fetch('/api/projects').then(function (r) { return r.json(); }).then(function (body) {
+    S.projects = (body && body.projects) || [];
+    var sel = $('projectSel');
+    sel.innerHTML = '<option value="">(repo path below)</option>' + S.projects.map(function (pr) {
+      var label = esc(pr.name + (pr.branch ? ' · ' + pr.branch : '') + (pr.dirty ? ' *' : ''));
+      return '<option value="' + esc(pr.path) + '">' + label + '</option>';
+    }).join('');
+    sel.value = '';
+  }).catch(function () { /* picker optional */ });
+  $('projectSel').addEventListener('change', function () {
+    if (this.value) $('repoInput').value = this.value;
+  });
+  fetch('/api/models').then(function (r) { return r.json(); }).then(function (body) {
+    S.models = (body && body.profiles) || [];
+    var sel = $('modelSel');
+    sel.innerHTML = S.models.map(function (mp) {
+      var label = esc(mp.profile + ' · ' + mp.model);
+      var isDefault = mp.profile === 'default' ? ' selected' : '';
+      return '<option value="' + esc(mp.profile) + '"' + isDefault + '>' + label + '</option>';
+    }).join('');
+  }).catch(function () { /* picker optional */ });
+}
+
 /* ======================= launcher ======================= */
 function setLaunchBusy(busy) {
   var btn = $('launchBtn');
@@ -1833,6 +2034,11 @@ function launchTask() {
   }
   var payload = { issue: issue, repo_root: repoRoot };
   if (demo) payload.demo_mode = true;   // only included when checked
+  var profile = $('modelSel').value;
+  if (profile && profile !== 'default') payload.model_profile = profile;
+  if (S.followupOf) payload.followup_of = S.followupOf;
+  S.pinnedRun = null;  // the new task owns the cockpit
+  S.activeSession = null;
   setLaunchBusy(true);
   fetch('/api/tasks', {
     method: 'POST',
@@ -1948,6 +2154,8 @@ window.addEventListener('DOMContentLoaded', function () {
   var isReplay = initReplay();
   fetchAgents();          // always attempted; absence tolerated
   if (!isReplay) connectWS();
+  initSessionsUI();       // chat sidebar + pickers (live + replay-safe)
+  fetchSessions();
   updateTabLabels();
 });
 </script>
