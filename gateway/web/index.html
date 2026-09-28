@@ -507,6 +507,139 @@ input[type="text"] { font-family: var(--mono); font-size: 11.5px; }
   .kanban { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
   .del-factors { grid-template-columns: 1fr; }
 }
+/* ======================= multi-view app (platform P6) ======================= */
+/* display:grid/flex rules below would override the hidden attribute — make
+   the UA's hidden semantics win for view switching. */
+#layout[hidden], .app-view[hidden], .modal-veil[hidden] { display: none !important; }
+.viewnav { display: flex; gap: 4px; margin-left: 14px; }
+.view-btn {
+  background: transparent; color: var(--muted); border: 1px solid transparent;
+  border-radius: 7px; padding: 5px 12px; font-size: 12px; font-family: var(--sans);
+  cursor: pointer; transition: background .15s, color .15s;
+}
+.view-btn:hover { color: var(--text); background: rgba(148, 163, 184, .08); }
+.view-btn.active {
+  color: var(--primary-hi); background: var(--primary-soft);
+  border-color: rgba(59, 130, 246, .35);
+}
+.app-view {
+  flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column;
+  padding: 16px 18px;
+}
+.view-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex: none; }
+.view-head h2 { font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+.view-head .sub { color: var(--dim); font-size: 11.5px; }
+.view-head .spacer { flex: 1; }
+
+/* ---- projects view ---- */
+.proj-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px; align-content: start;
+}
+.pcard {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+  transition: border-color .15s;
+}
+.pcard:hover { border-color: var(--conn); }
+.pcard.active { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary-soft); }
+.pcard .prow { display: flex; align-items: baseline; gap: 8px; }
+.pcard h4 { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard .ppath { font-family: var(--mono); font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard .pbadges { display: flex; flex-wrap: wrap; gap: 6px; }
+.pbadge {
+  font-size: 10px; padding: 2px 7px; border-radius: 999px; letter-spacing: .03em;
+  border: 1px solid var(--line-soft); color: var(--muted); background: rgba(148, 163, 184, .06);
+}
+.pbadge.git { color: var(--cyan); border-color: rgba(34, 211, 238, .3); background: var(--cyan-soft); }
+.pbadge.dirty { color: var(--warn-hi); border-color: rgba(245, 158, 11, .3); background: var(--warn-soft); }
+.pbadge.running { color: var(--primary-hi); border-color: rgba(59, 130, 246, .35); background: var(--primary-soft); }
+.pbadge.runs { color: var(--ok-hi); border-color: rgba(16, 185, 129, .3); background: var(--ok-soft); }
+.pcard .pacts { display: flex; gap: 6px; margin-top: 2px; }
+.proj-empty { color: var(--dim); padding: 30px 10px; text-align: center; }
+.pr-history { margin-top: 16px; flex: none; }
+.pr-history h3 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+.prh-row {
+  display: flex; gap: 10px; align-items: center; padding: 6px 10px; border-radius: 7px;
+  font-size: 12px; cursor: pointer;
+}
+.prh-row:hover { background: rgba(148, 163, 184, .07); }
+.prh-row .rid { font-family: var(--mono); color: var(--muted); }
+.prh-row .rtitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- models view ---- */
+.mdl-table { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 18px; }
+.mdl-row { display: grid; grid-template-columns: 130px 150px 1fr 130px 170px 120px; gap: 8px; align-items: center; background: var(--surface); border-bottom: 1px solid var(--line-soft); padding: 9px 12px; font-size: 12px; }
+.mdl-row:last-child { border-bottom: none; }
+.mdl-row.head { background: var(--surface-2); color: var(--dim); font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; }
+.mdl-row .mname { font-weight: 600; color: var(--primary-hi); }
+.mdl-row .mmodel { font-family: var(--mono); font-size: 11px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdl-row .menv { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.mdl-row .murl { font-family: var(--mono); font-size: 10.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdl-row .macts { display: flex; gap: 6px; justify-content: flex-end; }
+.mdl-badge { font-size: 9.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line-soft); color: var(--dim); }
+.mdl-badge.managed { color: var(--warn-hi); border-color: rgba(245, 158, 11, .3); }
+.mdl-badge.yaml { color: var(--cyan); border-color: rgba(34, 211, 238, .3); }
+.agentbind-grid { display: flex; flex-direction: column; gap: 8px; }
+.abind-row {
+  display: grid; grid-template-columns: 120px 110px 1fr 220px; gap: 10px; align-items: center;
+  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; padding: 8px 12px;
+}
+.abind-row .aid { font-family: var(--mono); font-size: 11.5px; color: var(--text); }
+.abind-row .arole { color: var(--muted); font-size: 11px; }
+.abind-row .anote { color: var(--dim); font-size: 10.5px; }
+.abind-row select { margin: 0; }
+
+/* ---- modal (folder picker + model form) ---- */
+.modal-veil {
+  position: fixed; inset: 0; background: rgba(2, 6, 16, .66); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center; z-index: 90;
+}
+.modal {
+  background: var(--bg-deep); border: 1px solid var(--line); border-radius: 12px;
+  width: min(720px, 92vw); max-height: 84vh; display: flex; flex-direction: column;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .5);
+}
+.modal-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
+.modal-head h3 { font-size: 13.5px; font-weight: 600; }
+.modal-head .spacer { flex: 1; }
+.modal-body { padding: 14px 16px; overflow: auto; flex: 1; min-height: 0; }
+.modal-foot { display: flex; gap: 8px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--line-soft); }
+.modal-foot .note { color: var(--dim); font-size: 10.5px; flex: 1; }
+.btn {
+  background: var(--primary); color: #fff; border: none; border-radius: 7px;
+  padding: 7px 14px; font-size: 12px; cursor: pointer; font-family: var(--sans);
+}
+.btn:hover { background: var(--primary-hi); }
+.btn.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.btn.ghost:hover { color: var(--text); border-color: var(--conn); }
+.btn.danger { background: transparent; color: var(--fail-hi); border: 1px solid rgba(239, 68, 68, .4); }
+.btn.danger:hover { background: var(--fail-soft); }
+.btn:disabled { opacity: .45; cursor: default; }
+
+/* folder picker */
+.fs-crumbs { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.fs-crumb { color: var(--primary-hi); cursor: pointer; font-family: var(--mono); font-size: 11.5px; }
+.fs-crumb:hover { text-decoration: underline; }
+.fs-sep { color: var(--dim); }
+.fs-pathbar { display: flex; gap: 6px; margin-bottom: 10px; }
+.fs-entries { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px; }
+.fs-entry {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 7px;
+  font-family: var(--mono); font-size: 11.5px; cursor: pointer; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fs-entry:hover { background: rgba(59, 130, 246, .12); }
+.fs-entry.file { color: var(--dim); cursor: default; }
+.fs-entry.file:hover { background: transparent; }
+.fs-entry .ic { flex: none; opacity: .8; }
+.fs-note { color: var(--dim); font-size: 11px; padding: 10px 4px; }
+
+/* model form */
+.form-grid { display: grid; grid-template-columns: 140px 1fr; gap: 10px 12px; align-items: center; }
+.form-grid label.fld { margin: 0; }
+.form-grid .full { grid-column: 1 / -1; }
+.form-err { color: var(--fail-hi); font-size: 11.5px; margin-top: 8px; min-height: 14px; }
 </style>
 </head>
 <body>
@@ -524,6 +657,11 @@ input[type="text"] { font-family: var(--mono); font-size: 11.5px; }
     </svg>
     <span>Foreman <b>Cockpit</b></span>
   </div>
+  <nav class="viewnav" id="viewNav" aria-label="views">
+    <button class="view-btn active" data-view="chat" role="button" aria-pressed="true" title="the agent cockpit">Chat</button>
+    <button class="view-btn" data-view="projects" role="button" aria-pressed="false" title="open a folder, manage projects">Projects</button>
+    <button class="view-btn" data-view="models" role="button" aria-pressed="false" title="model profiles + per-agent bindings">Models</button>
+  </nav>
   <div class="ws-box" title="gateway WebSocket status">
     <span class="wsdot connecting" id="wsDot" role="status" aria-label="websocket status"></span>
     <span class="ws-text" id="wsText">connecting…</span>
@@ -660,6 +798,117 @@ input[type="text"] { font-family: var(--mono); font-size: 11.5px; }
   </aside>
 </main>
 
+<!-- ============ projects view: open a folder, manage projects ============ -->
+<main id="view-projects" class="app-view" hidden aria-label="projects">
+  <div class="view-head">
+    <h2>Projects</h2>
+    <span class="sub">folders the agent can work in — work always runs in the ACTIVE project</span>
+    <div class="spacer"></div>
+    <button class="btn" id="btnOpenFolder">📂 open folder…</button>
+    <button class="btn ghost" id="btnProjRefresh" title="reload project list">⟳</button>
+  </div>
+  <div class="proj-grid" id="projGrid"></div>
+  <div class="pr-history" id="projHistory" hidden>
+    <h3 id="prHistTitle">runs</h3>
+    <div id="prHistRows"></div>
+  </div>
+</main>
+
+<!-- ============ models view: settings-based model management ============ -->
+<main id="view-models" class="app-view" hidden aria-label="model settings">
+  <div class="view-head">
+    <h2>Models</h2>
+    <span class="sub">profiles + per-agent bindings — live on the NEXT run, no restart needed</span>
+    <div class="spacer"></div>
+    <button class="btn" id="btnAddModel">+ add profile</button>
+    <button class="btn ghost" id="btnModelsRefresh" title="reload model settings">⟳</button>
+  </div>
+  <div class="mdl-table" id="mdlTable"></div>
+  <div class="view-head" style="margin-top:8px">
+    <h2 style="font-size:13px">Agent bindings</h2>
+    <span class="sub">change any sub-agent's model individually · “default” follows the run-level picker</span>
+  </div>
+  <div class="agentbind-grid" id="agentBindGrid"></div>
+  <div class="view-head" style="margin-top:18px">
+    <span class="sub">harness.yaml seeds the defaults; runtime changes persist in <span class="mono">.harness/models.json</span> and overlay it</span>
+    <div class="spacer"></div>
+    <button class="btn danger" id="btnModelsReset" title="drop every runtime override">reset to harness.yaml</button>
+  </div>
+</main>
+
+<!-- ============ folder picker modal ============ -->
+<div class="modal-veil" id="folderPicker" hidden>
+  <div class="modal" role="dialog" aria-label="open a folder">
+    <div class="modal-head">
+      <h3>📂 Open a folder</h3>
+      <div class="spacer"></div>
+      <label class="chk" for="fsHiddenChk" style="margin:0">
+        <input type="checkbox" id="fsHiddenChk"><span>hidden files</span>
+      </label>
+    </div>
+    <div class="modal-body">
+      <div class="fs-crumbs" id="fsCrumbs"></div>
+      <div class="fs-pathbar">
+        <input type="text" id="fsPathInput" spellcheck="false" placeholder="/absolute/path" style="flex:1">
+        <button class="btn ghost" id="fsGoBtn">go</button>
+        <button class="btn ghost" id="fsUpBtn" title="parent directory">↑ up</button>
+      </div>
+      <div class="fs-entries" id="fsEntries"></div>
+      <div class="fs-note" id="fsNote"></div>
+    </div>
+    <div class="modal-foot">
+      <span class="note">folders on the machine the orchestrator runs on — registering one makes it the ACTIVE project</span>
+      <button class="btn ghost" id="fsCancelBtn">cancel</button>
+      <button class="btn" id="fsConfirmBtn">open here ▸</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ model profile form modal ============ -->
+<div class="modal-veil" id="modelForm" hidden>
+  <div class="modal" role="dialog" aria-label="model profile">
+    <div class="modal-head">
+      <h3 id="mfTitle">Model profile</h3>
+      <div class="spacer"></div>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <label class="fld" for="mfProfile">profile id</label>
+        <input type="text" id="mfProfile" spellcheck="false" placeholder="e.g. glm-flash">
+        <label class="fld" for="mfProvider">provider</label>
+        <select class="sel" id="mfProvider">
+          <option value="openai-compatible">openai-compatible</option>
+          <option value="openai">openai</option>
+          <option value="anthropic">anthropic</option>
+          <option value="google">google (gemini)</option>
+          <option value="fake">fake (demo)</option>
+        </select>
+        <label class="fld" for="mfName">model name</label>
+        <input type="text" id="mfName" spellcheck="false" placeholder="e.g. glm-4-plus">
+        <label class="fld" for="mfKeyEnv">api key env</label>
+        <input type="text" id="mfKeyEnv" spellcheck="false" placeholder="AI_API_KEY — NAME of the env var, never the key">
+        <label class="fld" for="mfBaseUrl">base url</label>
+        <input type="text" id="mfBaseUrl" spellcheck="false" placeholder="https://…/v1 (optional)">
+        <label class="fld" for="mfTemp">temperature</label>
+        <input type="text" id="mfTemp" placeholder="0.0">
+        <label class="fld" for="mfMaxTokens">max tokens</label>
+        <input type="text" id="mfMaxTokens" placeholder="8192">
+        <label class="fld" for="mfTimeout">timeout (s)</label>
+        <input type="text" id="mfTimeout" placeholder="240">
+        <label class="fld" for="mfRetries">max retries</label>
+        <input type="text" id="mfRetries" placeholder="4">
+        <div class="full fs-note">the key VALUE is never stored or sent: the orchestrator reads the env var on ITS side at run time</div>
+      </div>
+      <div class="form-err" id="mfErr"></div>
+    </div>
+    <div class="modal-foot">
+      <span class="note" id="mfNote">changes take effect on the next run</span>
+      <button class="btn ghost" id="mfCancelBtn">cancel</button>
+      <button class="btn" id="mfSaveBtn">save profile</button>
+    </div>
+  </div>
+</div>
+
 <script>
 'use strict';
 /* =====================================================================
@@ -706,7 +955,14 @@ var S = {
   pinnedRun: null,           // open-by-id: live events for other runs are skipped
   followupOf: null,          // launch continues this session
   projects: [],              // registered projects for the picker
-  models: []                 // model profiles for the picker
+  models: [],                // model profiles for the picker
+  // Multi-view app (platform P6)
+  view: 'chat',              // 'chat' | 'projects' | 'models'
+  activeProject: null,       // path of the project new work runs in
+  projectsFull: [],          // rich project cards payload (/api/projects)
+  modelsFull: null,          // rich models payload (/api/models: profiles+agents+overrides)
+  fs: { cwd: null, parent: null, entries: [], truncated: false, hidden: false },
+  mf: { editing: null }      // model form state (null = adding new)
 };
 
 /* ======================= tiny helpers ======================= */
@@ -2084,6 +2340,371 @@ function launchTask() {
     .then(function () { setLaunchBusy(false); });
 }
 
+/* =====================================================================
+   Multi-view app (platform P6): view router, Projects (open folder),
+   Models (settings-based management + per-agent bindings). The chat
+   cockpit keeps running underneath — its WS + renders are view-agnostic.
+   ===================================================================== */
+var VIEWS = ['chat', 'projects', 'models'];
+function setView(v) {
+  if (VIEWS.indexOf(v) < 0) return;
+  S.view = v;
+  VIEWS.forEach(function (name) {
+    var el = name === 'chat' ? $('layout') : $('view-' + name);
+    if (el) el.hidden = (name !== v);
+  });
+  document.querySelectorAll('.view-btn').forEach(function (b) {
+    var on = b.dataset.view === v;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  if (v === 'projects') loadProjectsView();
+  if (v === 'models') loadModelsView();
+}
+
+/* ---- shared: bridge the active project into the chat launcher ---- */
+function activateProject(path, quiet) {
+  S.activeProject = path || null;
+  var sel = $('projectSel');
+  if (path && sel) {
+    // register option if the picker hasn't loaded it yet
+    var has = Array.prototype.some.call(sel.options, function (o) { return o.value === path; });
+    if (!has) {
+      var opt = document.createElement('option');
+      opt.value = path; opt.textContent = path;
+      sel.appendChild(opt);
+    }
+    sel.value = path;
+  }
+  if (path && $('repoInput')) $('repoInput').value = path;
+  if (!quiet) flashNote('active project: ' + (path || '(none)'));
+}
+function flashNote(msg) {
+  // reuse the launcher's result strip when visible; else a passive toast
+  var strip = $('launchResult');
+  if (strip && !strip.hidden) {
+    strip.className = 'launch-result ok';
+    strip.innerHTML = esc(msg);
+    setTimeout(function () { if (strip.innerHTML === esc(msg)) strip.hidden = true; }, 2600);
+    return;
+  }
+  var t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:120;'
+    + 'background:var(--surface-2);border:1px solid var(--line);color:var(--text);'
+    + 'border-radius:8px;padding:8px 14px;font-size:12px;box-shadow:0 8px 30px rgba(0,0,0,.45)';
+  document.body.appendChild(t);
+  setTimeout(function () { t.remove(); }, 2400);
+}
+
+/* ---- projects view ---- */
+function loadProjectsView() {
+  fetch('/api/projects').then(function (r) { return r.json(); }).then(function (body) {
+    S.projectsFull = (body && body.projects) || [];
+    renderProjects();
+  }).catch(function () {
+    $('projGrid').innerHTML = '<div class="proj-empty">projects unavailable — is the orchestrator up?</div>';
+  });
+}
+function renderProjects() {
+  var grid = $('projGrid');
+  var ps = S.projectsFull;
+  if (!ps.length) {
+    grid.innerHTML = '<div class="proj-empty">no projects yet — <b>📂 open folder…</b> picks one from the filesystem,<br>or `foreman projects add &lt;path&gt` on the CLI.</div>';
+    $('projHistory').hidden = true;
+    return;
+  }
+  grid.innerHTML = ps.map(function (p) {
+    var active = p.path && p.path === S.activeProject;
+    var runBadge = '';
+    var act = p.active_run;
+    if (act) {
+      var rid = typeof act === 'string' ? act : String((act && act.run_id) || '');
+      runBadge = '<span class="pbadge running">● running ' + esc(rid.slice(0, 8)) + '</span>';
+    }
+    var git = p.git
+      ? '<span class="pbadge git">' + esc('⎇ ' + (p.branch || '-')) + '</span>'
+        + (p.dirty ? '<span class="pbadge dirty">dirty' + (p.changed_files ? ' · ' + num(p.changed_files) + ' files' : '') + '</span>' : '')
+      : '<span class="pbadge">no git</span>';
+    return '<div class="pcard' + (active ? ' active' : '') + '" data-path="' + esc(p.path) + '">'
+      + '<div class="prow"><h4>' + esc(p.name || p.id) + '</h4>'
+      + (active ? '<span class="pbadge running">ACTIVE</span>' : '') + '</div>'
+      + '<div class="ppath" title="' + esc(p.path) + '">' + esc(p.path) + '</div>'
+      + '<div class="pbadges">' + git + runBadge
+      + '<span class="pbadge">' + num(p.python_files) + ' py · ' + num(p.files) + ' files</span></div>'
+      + '<div class="pacts">'
+      + (active
+        ? '<button class="btn ghost" data-act="chat" data-path="' + esc(p.path) + '">go to chat ▸</button>'
+        : '<button class="btn" data-act="activate" data-path="' + esc(p.path) + '">make active</button>'
+          + '<button class="btn ghost" data-act="chat" data-path="' + esc(p.path) + '">open in chat</button>')
+      + '<button class="btn ghost" data-act="history" data-path="' + esc(p.path) + '" data-id="' + esc(p.id) + '">runs</button>'
+      + '<button class="btn danger" data-act="remove" data-path="' + esc(p.path) + '" data-id="' + esc(p.id) + '" title="unregister (files stay on disk)">remove</button>'
+      + '</div></div>';
+  }).join('');
+}
+function projectsAction(act, path, id) {
+  if (act === 'activate') { activateProject(path); renderProjects(); return; }
+  if (act === 'chat') { activateProject(path, true); renderProjects(); setView('chat'); return; }
+  if (act === 'remove') {
+    if (!confirm('unregister "' + (id || path) + '"?\n(the folder and its files are NOT deleted)')) return;
+    fetch('/api/projects/' + encodeURIComponent(id || path), { method: 'DELETE' })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (body && body.removed) {
+          if (S.activeProject === path) activateProject(null, true);
+          loadProjectsView();
+          // keep the chat picker honest too
+          fetch('/api/projects').then(function (r) { return r.json(); }).then(function (b) {
+            S.projects = (b && b.projects) || [];
+            var sel = $('projectSel');
+            sel.innerHTML = '<option value="">(repo path below)</option>' + S.projects.map(function (pr) {
+              return '<option value="' + esc(pr.path) + '">' + esc(pr.name) + '</option>';
+            }).join('');
+            if (S.activeProject) sel.value = S.activeProject;
+          });
+        } else {
+          flashNote('not removed: ' + ((body && body.error) || 'unknown error'));
+        }
+      });
+    return;
+  }
+  if (act === 'history') loadProjectRuns(id);
+}
+function loadProjectRuns(id) {
+  fetch('/api/projects/' + encodeURIComponent(id)).then(function (r) { return r.json(); }).then(function (body) {
+    if (!body || !body.found) { $('projHistory').hidden = true; return; }
+    var runs = (body.runs || []).slice(0, 12);
+    var box = $('projHistory');
+    $('prHistTitle').textContent = 'runs · ' + (body.project.name || id);
+    $('prHistRows').innerHTML = runs.length ? runs.map(function (r) {
+      var v = String(r.verdict || 'unknown');
+      var cls = v === 'VERIFIED' ? 'ok' : (v === 'CANCELLED' ? 'warn' : 'fail');
+      return '<div class="prh-row" data-run="' + esc(r.run_id) + '">'
+        + '<span class="rid">' + esc(String(r.run_id).slice(0, 12)) + '</span>'
+        + '<span class="rtitle">' + esc(trunc(r.title || r.issue || '', 70)) + '</span>'
+        + '<span class="pbadge ' + cls + '">' + esc(v) + '</span></div>';
+    }).join('') : '<div class="fs-note">no runs yet in this project</div>';
+    box.hidden = false;
+  });
+}
+
+/* ---- folder picker ---- */
+function openFolderPicker() { $('folderPicker').hidden = false; fsBrowse(S.fs.cwd || '/'); }
+function closeFolderPicker() { $('folderPicker').hidden = true; }
+function fsBrowse(path) {
+  fetch('/api/fs?path=' + encodeURIComponent(path)).then(function (r) { return r.json(); }).then(function (body) {
+    if (!body || !body.found) {
+      $('fsNote').textContent = (body && body.error) || 'unreachable path';
+      return;
+    }
+    S.fs.cwd = body.path;
+    S.fs.parent = body.parent;
+    S.fs.entries = body.entries || [];
+    S.fs.truncated = !!body.truncated;
+    $('fsPathInput').value = body.path;
+    renderFs();
+  }).catch(function (err) { $('fsNote').textContent = 'browse failed: ' + err.message; });
+}
+function renderFs() {
+  var crumbs = $('fsCrumbs');
+  var parts = String(S.fs.cwd || '/').split('/').filter(Boolean);
+  var html = '<span class="fs-crumb" data-p="/">/</span>';
+  var acc = '';
+  parts.forEach(function (part) {
+    acc += '/' + part;
+    html += '<span class="fs-sep">›</span><span class="fs-crumb" data-p="' + esc(acc) + '">' + esc(part) + '</span>';
+  });
+  crumbs.innerHTML = html;
+  var showHidden = S.fs.hidden;
+  var entries = S.fs.entries.filter(function (e) { return showHidden || e.name.charAt(0) !== '.'; });
+  $('fsEntries').innerHTML = entries.map(function (e) {
+    return '<div class="fs-entry' + (e.is_dir ? '' : ' file') + '" data-name="' + esc(e.name) + '" data-dir="' + (e.is_dir ? '1' : '0') + '">'
+      + '<span class="ic">' + (e.is_dir ? '📁' : '📄') + '</span>'
+      + '<span>' + esc(e.name) + '</span></div>';
+  }).join('') || '<div class="fs-note">empty directory</div>';
+  $('fsNote').textContent = (S.fs.truncated ? 'list truncated at 500 entries · ' : '')
+    + entries.length + ' entries' + (showHidden ? ' (hidden shown)' : '');
+  $('fsUpBtn').disabled = !S.fs.parent;
+}
+function fsEnter(dir, name) {
+  if (!dir) return;
+  var next = (S.fs.cwd === '/' ? '' : S.fs.cwd) + '/' + name;
+  fsBrowse(next);
+}
+function fsConfirm() {
+  var path = S.fs.cwd;
+  if (!path) return;
+  fetch('/api/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: path })
+  }).then(function (r) { return r.json(); }).then(function (body) {
+    if (body && body.registered) {
+      closeFolderPicker();
+      activateProject(path, true);
+      loadProjectsView();
+      flashNote('opened folder → active project: ' + path);
+    } else {
+      $('fsNote').textContent = 'not registered: ' + ((body && body.error) || 'unknown error');
+    }
+  }).catch(function (err) { $('fsNote').textContent = 'register failed: ' + err.message; });
+}
+
+/* ---- models view ---- */
+function loadModelsView() {
+  fetch('/api/models').then(function (r) { return r.json(); }).then(function (body) {
+    S.modelsFull = body || {};
+    renderModels();
+  }).catch(function () {
+    $('mdlTable').innerHTML = '<div class="proj-empty">model settings unavailable — is the orchestrator up?</div>';
+  });
+}
+function renderModels() {
+  var d = S.modelsFull || {};
+  var profiles = d.profiles || [];
+  var tbl = $('mdlTable');
+  tbl.innerHTML = '<div class="mdl-row head"><span>profile</span><span>provider</span><span>model</span><span>key env</span><span>base url</span><span style="text-align:right">actions</span></div>'
+    + (profiles.length ? profiles.map(function (m) {
+      var badge = m.managed
+        ? '<span class="mdl-badge managed" title="managed at runtime (.harness/models.json)">runtime</span> '
+        : '<span class="mdl-badge yaml" title="seeded by harness.yaml">yaml</span> ';
+      var isDefault = m.profile === (d.default_profile || 'default');
+      return '<div class="mdl-row" data-profile="' + esc(m.profile) + '">'
+        + '<span class="mname">' + esc(m.profile) + (isDefault ? ' <span class="mdl-badge">default</span>' : '') + '</span>'
+        + '<span>' + esc(m.provider) + '</span>'
+        + '<span class="mmodel" title="' + esc(m.model) + '">' + esc(m.model) + '</span>'
+        + '<span class="menv">' + esc(m.api_key_env || '—') + '</span>'
+        + '<span class="murl" title="' + esc(m.base_url || '') + '">' + esc(m.base_url || '—') + '</span>'
+        + '<span class="macts">' + badge
+        + '<button class="btn ghost" data-act="edit">edit</button>'
+        + '<button class="btn danger" data-act="remove"' + (isDefault ? ' disabled title="the default profile is the fallback anchor"' : '') + '>remove</button>'
+        + '</span></div>';
+    }).join('') : '<div class="mdl-row"><span class="proj-empty" style="grid-column:1/-1">no profiles — harness.yaml missing?</span></div>');
+
+  // agent bindings: roster with per-agent selects
+  var agents = d.agents || {};
+  var roster = Object.keys(agents).sort();
+  $('agentBindGrid').innerHTML = roster.map(function (aid) {
+    var a = agents[aid];
+    var bound = a.model && a.model !== 'default';
+    return '<div class="abind-row" data-agent="' + esc(aid) + '">'
+      + '<span class="aid">' + esc(aid) + '</span>'
+      + '<span class="arole">' + esc(a.role || '') + '</span>'
+      + '<span class="anote">' + (a.overridden ? 'runtime binding' : 'harness.yaml binding') + ': <span class="mono">' + esc(a.model || 'default') + '</span>'
+      + (bound ? ' — held regardless of the run-level picker' : ' — follows the run-level picker') + '</span>'
+      + '<select class="sel" data-agent="' + esc(aid) + '">'
+      + '<option value="default"' + (a.model === 'default' ? ' selected' : '') + '>default (follow run picker)</option>'
+      + profiles.map(function (m) {
+        return '<option value="' + esc(m.profile) + '"' + (a.model === m.profile ? ' selected' : '') + '>' + esc(m.profile + ' · ' + m.model) + '</option>';
+      }).join('')
+      + '</select></div>';
+  }).join('') || '<div class="fs-note">no agents in the roster</div>';
+}
+
+/* ---- model profile form ---- */
+function openModelForm(existing) {
+  S.mf.editing = existing || null;
+  var e = existing || { profile: '', provider: 'openai-compatible', model: '', api_key_env: 'AI_API_KEY', base_url: '' };
+  $('mfTitle').textContent = existing ? 'Edit profile — ' + e.profile : 'Add model profile';
+  $('mfProfile').value = e.profile || '';
+  $('mfProfile').disabled = !!existing;  // the id is the key: renames are copy+remove
+  $('mfProvider').value = e.provider || 'openai-compatible';
+  $('mfName').value = e.model || '';
+  $('mfKeyEnv').value = e.api_key_env || 'AI_API_KEY';
+  $('mfBaseUrl').value = e.base_url || '';
+  $('mfTemp').value = '0.0';
+  $('mfMaxTokens').value = '8192';
+  $('mfTimeout').value = '240';
+  $('mfRetries').value = '4';
+  $('mfErr').textContent = '';
+  $('mfNote').textContent = existing
+    ? 'saving edits the EFFECTIVE profile; yaml-seeded ones get a runtime override (yaml file untouched)'
+    : 'the new profile is immediately selectable for runs and agent bindings';
+  $('modelForm').hidden = false;
+}
+function closeModelForm() { $('modelForm').hidden = true; S.mf.editing = null; }
+function saveModelForm() {
+  var editing = S.mf.editing;
+  var profile = $('mfProfile').value.trim();
+  var fields = {
+    provider: $('mfProvider').value,
+    name: $('mfName').value.trim(),
+    api_key_env: $('mfKeyEnv').value.trim() || 'AI_API_KEY',
+    base_url: $('mfBaseUrl').value.trim() || null
+  };
+  var temp = parseFloat($('mfTemp').value); if (isFinite(temp)) fields.temperature = temp;
+  var mt = parseInt($('mfMaxTokens').value, 10); if (isFinite(mt) && mt > 0) fields.max_tokens = mt;
+  var to = parseFloat($('mfTimeout').value); if (isFinite(to) && to > 0) fields.request_timeout_seconds = to;
+  var rt = parseInt($('mfRetries').value, 10); if (isFinite(rt) && rt >= 0) fields.max_retries = rt;
+  if (!fields.name) { $('mfErr').textContent = 'model name is required'; return; }
+  var url = '/api/models';
+  var method = 'POST';
+  if (editing) {
+    url = '/api/models/' + encodeURIComponent(editing.profile);
+    method = 'PATCH';
+    profile = editing.profile;
+  }
+  fetch(url, {
+    method: method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile: profile, fields: fields })
+  }).then(function (r) { return r.json(); }).then(function (body) {
+    if (body && body.saved) {
+      closeModelForm();
+      loadModelsView();
+      refreshModelPicker();
+      flashNote('model profile saved: ' + profile + ' (next run picks it up)');
+    } else {
+      $('mfErr').textContent = ((body && body.error) || 'save failed');
+    }
+  }).catch(function (err) { $('mfErr').textContent = 'save failed: ' + err.message; });
+}
+function removeModelProfile(profile) {
+  if (!confirm('remove model profile "' + profile + '"?\n(yaml-seeded ones come back after a settings reset)')) return;
+  fetch('/api/models/' + encodeURIComponent(profile), { method: 'DELETE' })
+    .then(function (r) { return r.json(); })
+    .then(function (body) {
+      if (body && body.saved) {
+        loadModelsView(); refreshModelPicker();
+        flashNote('removed: ' + profile);
+      } else flashNote('not removed: ' + ((body && body.error) || 'unknown'));
+    });
+}
+function rebindAgent(agentId, profile) {
+  fetch('/api/agents/' + encodeURIComponent(agentId) + '/model', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile: profile })
+  }).then(function (r) { return r.json(); }).then(function (body) {
+    if (body && body.saved) {
+      flashNote(agentId + ' → ' + profile + ' (next run)');
+      loadModelsView();
+    } else flashNote('not saved: ' + ((body && body.error) || 'unknown'));
+  });
+}
+function resetModelSettings() {
+  if (!confirm('drop every runtime model override and return to harness.yaml as written?')) return;
+  fetch('/api/models/reset', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (body) {
+    if (body && body.reset) {
+      loadModelsView(); refreshModelPicker();
+      flashNote('model settings reset to harness.yaml');
+    }
+  });
+}
+function refreshModelPicker() {
+  // keep the chat launcher's model select in sync with settings changes
+  fetch('/api/models').then(function (r) { return r.json(); }).then(function (body) {
+    S.models = (body && body.profiles) || [];
+    var sel = $('modelSel');
+    var prev = sel.value || 'default';
+    sel.innerHTML = S.models.map(function (mp) {
+      var label = esc(mp.profile + ' · ' + mp.model);
+      return '<option value="' + esc(mp.profile) + '"' + (mp.profile === 'default' ? ' selected' : '') + '>' + label + '</option>';
+    }).join('');
+    if (S.models.some(function (m) { return m.profile === prev; })) sel.value = prev;
+  }).catch(function () { /* picker optional */ });
+}
+
 /* ======================= wiring ======================= */
 window.addEventListener('DOMContentLoaded', function () {
   // tabs
@@ -2158,6 +2779,88 @@ window.addEventListener('DOMContentLoaded', function () {
   initSessionsUI();       // chat sidebar + pickers (live + replay-safe)
   fetchSessions();
   updateTabLabels();
+
+  // ---- multi-view app wiring (platform P6) ----
+  document.querySelectorAll('#viewNav .view-btn').forEach(function (b) {
+    b.addEventListener('click', function () { setView(b.dataset.view); });
+  });
+  $('btnOpenFolder').addEventListener('click', openFolderPicker);
+  $('btnProjRefresh').addEventListener('click', loadProjectsView);
+  // project card actions (delegated — grid re-renders)
+  $('projGrid').addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('button[data-act]') : null;
+    if (btn) {
+      projectsAction(btn.dataset.act, btn.dataset.path, btn.dataset.id);
+      return;
+    }
+    var card = e.target.closest ? e.target.closest('.pcard') : null;
+    if (card && card.dataset.path) activateProject(card.dataset.path);
+  });
+  $('prHistRows').addEventListener('click', function (e) {
+    var row = e.target.closest ? e.target.closest('.prh-row') : null;
+    if (row && row.dataset.run) { openSession(row.dataset.run); setView('chat'); }
+  });
+  // folder picker
+  $('fsCancelBtn').addEventListener('click', closeFolderPicker);
+  $('fsConfirmBtn').addEventListener('click', fsConfirm);
+  $('fsUpBtn').addEventListener('click', function () { if (S.fs.parent) fsBrowse(S.fs.parent); });
+  $('fsGoBtn').addEventListener('click', function () { fsBrowse($('fsPathInput').value.trim() || '/'); });
+  $('fsPathInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') fsBrowse(this.value.trim() || '/');
+  });
+  $('fsEntries').addEventListener('click', function (e) {
+    var en = e.target.closest ? e.target.closest('.fs-entry') : null;
+    if (en && en.dataset.dir === '1') fsEnter(true, en.dataset.name);
+  });
+  $('fsCrumbs').addEventListener('click', function (e) {
+    if (e.target.dataset && e.target.dataset.p) fsBrowse(e.target.dataset.p);
+  });
+  $('fsHiddenChk').addEventListener('change', function () {
+    S.fs.hidden = this.checked;
+    renderFs();
+  });
+  $('folderPicker').addEventListener('click', function (e) {
+    if (e.target === this) closeFolderPicker();  // veil click = cancel
+  });
+  // models view
+  $('btnAddModel').addEventListener('click', function () { openModelForm(null); });
+  $('btnModelsRefresh').addEventListener('click', loadModelsView);
+  $('btnModelsReset').addEventListener('click', resetModelSettings);
+  $('mdlTable').addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('button[data-act]') : null;
+    if (!btn) return;
+    var row = btn.closest('.mdl-row');
+    var profile = row && row.dataset.profile;
+    if (btn.dataset.act === 'edit' && profile) {
+      var m = (S.modelsFull && S.modelsFull.profiles || []).find(function (x) { return x.profile === profile; });
+      if (m) openModelForm(m);
+    }
+    if (btn.dataset.act === 'remove' && profile) removeModelProfile(profile);
+  });
+  $('agentBindGrid').addEventListener('change', function (e) {
+    if (e.target.tagName === 'SELECT' && e.target.dataset.agent) {
+      rebindAgent(e.target.dataset.agent, e.target.value);
+    }
+  });
+  // model form
+  $('mfCancelBtn').addEventListener('click', closeModelForm);
+  $('mfSaveBtn').addEventListener('click', saveModelForm);
+  $('modelForm').addEventListener('click', function (e) {
+    if (e.target === this) closeModelForm();
+  });
+  // Escape closes either modal
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      if (!$('folderPicker').hidden) closeFolderPicker();
+      if (!$('modelForm').hidden) closeModelForm();
+    }
+  });
+  // chat picker <-> active project bridge (existing select's change event
+  // only writes repoInput; sync S.activeProject too)
+  $('projectSel').addEventListener('change', function () {
+    S.activeProject = this.value || null;
+    if (this.value) $('repoInput').value = this.value;
+  });
 });
 </script>
 </body>

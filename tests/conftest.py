@@ -38,6 +38,18 @@ def hermetic_project_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("HARNESS_PROJECTS_FILE", str(tmp_path / "projects.json"))
 
 
+@pytest.fixture(autouse=True)
+def hermetic_model_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the ModelStore sidecar from the operator's live settings.
+
+    Same reasoning as the project registry: the default path is CWD-relative
+    (`.harness/models.json`) and pytest shares the repo-root CWD with a
+    running `foreman start`. Model-settings tests must never read (or write!)
+    the operator's real model overrides.
+    """
+    monkeypatch.setenv("HARNESS_MODELS_FILE", str(tmp_path / "models.json"))
+
+
 @pytest.fixture
 def memory_store() -> MemoryContextStore:
     return MemoryContextStore()

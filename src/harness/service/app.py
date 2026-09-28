@@ -27,6 +27,7 @@ from harness.infrastructure.context_store import create_context_store
 from harness.infrastructure.logging import get_logger
 from harness.infrastructure.model_providers import create_model_provider
 from harness.service.events import RedisEventPublisher
+from harness.service.models import MAX_PROFILES, ModelStore
 from harness.service.projects import ProjectStore, run_history
 
 logger = get_logger(__name__)
@@ -78,6 +79,27 @@ class CancelRequest(BaseModel):
 
 class RenameRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
+
+
+class ModelUpsertRequest(BaseModel):
+    """Add or fully replace one model profile.
+
+    Fields are ModelConfig's (provider/name/api_key_env/base_url/temperature/
+    max_tokens/request_timeout_seconds/max_retries/tool_call_mode/extra);
+    unknown keys are ignored, values are validated against the real schema.
+    A KEY VALUE is never accepted - only the env var NAME holding it.
+    `profile` is validated by the store (soft-fail body, house style) so the
+    settings UI gets one error shape for every rejection.
+    """
+
+    profile: str = Field(min_length=1, max_length=40)
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentModelRequest(BaseModel):
+    """Re-bind one agent to a profile ("default" = follow the run picker)."""
+
+    profile: str = Field(min_length=1, max_length=40)
 
 
 EVIDENCE_FILES = (
@@ -263,9 +285,31 @@ def create_app(
             resolved_config = load_config()
         return resolved_config
 
+    def _effective_config() -> HarnessConfig:
+        """harness.yaml overlaid with the runtime model settings
+        (ModelStore: profile adds/edits/removals + per-agent bindings).
+
+        Identity when no overrides exist; a frozen model_copy otherwise, so
+        every consumer of `_config()` that must reflect settings changes
+        (model resolution, pipeline construction, the agents roster) goes
+        through this instead.
+        """
+        return model_store.apply(_config())
+
+    def _drop_pipeline_cache() -> int:
+        """Model settings changed: cached pipelines hold providers built from
+        the OLD profiles. Clearing the cache means the NEXT run (or agent
+        request) builds fresh from the effective config. An in-flight run
+        keeps its own pipeline object and finishes on the models it started
+        with - a settings change never re-routes a live run underneath it."""
+        dropped = len(pipelines)
+        pipelines.clear()
+        return dropped
+
     pipelines: dict[str, HarnessPipeline] = {}
     run_roots: dict[str, str] = _load_run_roots()
     projects = ProjectStore()
+    model_store = ModelStore()
     active_run_tasks: dict[str, asyncio.Task[Any]] = {}
     # One pipeline run per repo at a time: the gateway retries /agent/run
     # after transport hiccups, and a retried POST landing while the original
@@ -279,7 +323,7 @@ def create_app(
     def _resolve_model(profile_name: str) -> Any:
         """Model config for a named profile; unknown names fall back to
         `default` (a stale cockpit picker must never 400 a run)."""
-        cfg = _config()
+        cfg = _effective_config()
         return cfg.models.get(profile_name) or cfg.models["default"]
 
     def _pipeline(
@@ -299,7 +343,7 @@ def create_app(
         """
         key = f"{repo_root}:{model_profile}:demo" if demo else f"{repo_root}:{model_profile}"
         if key not in pipelines:
-            cfg = _config()
+            cfg = _effective_config()
             store = create_context_store(cfg.storage)
             model_cfg = _resolve_model(model_profile)
             key_env = model_cfg.api_key_env
@@ -345,9 +389,10 @@ def create_app(
 
         v2 contract (docs/cockpit-events.md): specialties, tool tier, and the
         hierarchy level so the cockpits can render the org tree without a
-        run in flight.
+        run in flight. Reflects the EFFECTIVE config: a per-agent model
+        binding made in settings shows up here immediately.
         """
-        cfg = _config()
+        cfg = _effective_config()
         levels = {"architect": 1, "manager": 2}
         return {
             "agents": [
@@ -372,18 +417,157 @@ def create_app(
 
     @app.get("/api/models")
     async def models() -> dict[str, Any]:
-        """Available model profiles (name + provider + model id; NEVER keys).
+        """EFFECTIVE model profiles + per-agent bindings (never key values).
 
-        The cockpits' model picker renders from this: switching a run from
-        the local shim to gemini/luna is a dropdown, not a yaml edit."""
-        cfg = _config()
+        The Models settings view renders from this: every profile the
+        harness can run on (yaml-seeded plus runtime-added, minus removed),
+        which are runtime-managed, and what each agent is currently bound
+        to. `api_key_env` is the NAME of the env var holding the key - the
+        key itself never crosses this boundary.
+        """
+        base = _config()
+        effective = _effective_config()
+        bindings = model_store.agent_bindings()
+        overrides = model_store.overrides_summary()
         return {
             "default_profile": "default",
             "profiles": [
-                {"profile": name, "provider": m.provider, "model": m.name}
-                for name, m in sorted(cfg.models.items())
+                {
+                    "profile": name,
+                    "provider": m.provider,
+                    "model": m.name,
+                    "api_key_env": m.api_key_env,
+                    "base_url": m.base_url,
+                    "managed": name in overrides["profiles"],
+                    "from_yaml": name in base.models,
+                }
+                for name, m in sorted(effective.models.items())
             ],
+            "agents": {
+                agent.agent_id: {
+                    "model": agent.model,
+                    "role": agent.role,
+                    "overridden": agent.agent_id in bindings,
+                }
+                for agent in effective.agents
+                if agent.enabled
+            },
+            "overrides": overrides,
+            "limits": {"max_profiles": MAX_PROFILES},
         }
+
+    @app.post("/api/models")
+    async def upsert_model(request: ModelUpsertRequest) -> dict[str, Any]:
+        """Add or fully replace one profile (settings-based model management).
+
+        Takes effect on the NEXT run: the pipeline cache is dropped so new
+        pipelines build from the new profile. An in-flight run finishes on
+        the models it started with.
+        """
+        ok, detail = model_store.upsert_profile(request.profile, request.fields, _config().models)
+        if not ok:
+            return {"saved": False, "error": detail}
+        dropped = _drop_pipeline_cache()
+        return {"saved": True, "profile": request.profile, "pipelines_rebuilt": dropped}
+
+    @app.patch("/api/models/{profile}")
+    async def patch_model(profile: str, request: ModelUpsertRequest) -> dict[str, Any]:
+        """Edit an existing EFFECTIVE profile: current values + patch -> save.
+
+        Editing a yaml-seeded profile stores a full override (the yaml file
+        is never rewritten by the API).
+        """
+        effective = _effective_config()
+        current = effective.models.get(profile)
+        if current is None:
+            return {"saved": False, "error": f"unknown profile '{profile}'"}
+        if request.profile != profile:
+            return {"saved": False, "error": "profile name cannot be renamed in place"}
+        merged = {**current.model_dump(), **request.fields}
+        ok, detail = model_store.upsert_profile(profile, merged, _config().models)
+        if not ok:
+            return {"saved": False, "error": detail}
+        dropped = _drop_pipeline_cache()
+        return {"saved": True, "profile": profile, "pipelines_rebuilt": dropped}
+
+    @app.delete("/api/models/{profile}")
+    async def delete_model(profile: str) -> dict[str, Any]:
+        ok, detail = model_store.remove_profile(profile, _config().models)
+        if not ok:
+            return {"saved": False, "error": detail}
+        dropped = _drop_pipeline_cache()
+        return {"saved": True, "removed": profile, "pipelines_rebuilt": dropped}
+
+    @app.post("/api/models/reset")
+    async def reset_models() -> dict[str, Any]:
+        """Drop every runtime override: back to harness.yaml as written."""
+        model_store.reset()
+        dropped = _drop_pipeline_cache()
+        return {"saved": True, "reset": True, "pipelines_rebuilt": dropped}
+
+    @app.put("/api/agents/{agent_id}/model")
+    async def set_agent_model(agent_id: str, request: AgentModelRequest) -> dict[str, Any]:
+        """Re-bind one agent to any effective profile, individually.
+
+        'default' un-binds: the agent follows the run-level profile picker.
+        """
+        ok, detail = model_store.set_agent_model(
+            agent_id, request.profile, _config().models, _config().agents
+        )
+        if not ok:
+            return {"saved": False, "error": detail}
+        dropped = _drop_pipeline_cache()
+        return {
+            "saved": True,
+            "agent": agent_id,
+            "profile": request.profile,
+            "pipelines_rebuilt": dropped,
+        }
+
+    @app.get("/api/fs")
+    async def browse_fs(path: str = ".") -> dict[str, Any]:
+        """Directory listing for the cockpit's folder picker.
+
+        Read-only, one level at a time: {path, parent, entries[{name, is_dir,
+        size}]} with directories first. The picker is the whole point of
+        "open this agent in a folder" - the server it runs on is the machine
+        whose folders you open, so this lists the orchestrator host's
+        filesystem (the gateway stays the only exposed surface). Errors
+        degrade to {found: false, error} - never a 500.
+        """
+        try:
+            target = Path(path).expanduser().resolve()
+        except (OSError, ValueError) as exc:
+            return {"found": False, "error": f"invalid path: {exc}"}
+        try:
+            if not target.exists():
+                return {"found": False, "error": f"not found: {target}"}
+            if not target.is_dir():
+                return {"found": False, "error": f"not a directory: {target}"}
+            entries = []
+            for child in sorted(target.iterdir(), key=lambda c: (not c.is_dir(), c.name.lower())):
+                try:
+                    is_dir = child.is_dir()
+                    entries.append(
+                        {
+                            "name": child.name,
+                            "is_dir": is_dir,
+                            "size": 0 if is_dir else child.stat().st_size,
+                        }
+                    )
+                except OSError:
+                    continue  # unreadable entry: skip, not fail
+            return {
+                "found": True,
+                "path": str(target),
+                "parent": str(target.parent) if str(target.parent) != str(target) else None,
+                "entries": entries[:500],
+                "truncated": len(entries) > 500,
+            }
+        except PermissionError:
+            return {"found": False, "error": f"permission denied: {target}"}
+        except OSError as exc:
+            return {"found": False, "error": str(exc)}
 
     @app.post("/api/projects")
     async def register_project(request: ProjectRequest) -> dict[str, Any]:
