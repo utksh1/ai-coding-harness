@@ -195,6 +195,17 @@ def _remember_run_root(
         registry.pop(next(iter(registry)))
 
 
+def _service_provider_factory(effective_demo: bool) -> Any:
+    """Provider factory for the service path: one provider per models-profile
+    (per-agent model binding - architect on one profile, specialists on
+    another - is resolved by the pipeline, not collapsed here)."""
+    if effective_demo:
+        from harness.infrastructure.model_providers.fake import build_demo_provider
+
+        return build_demo_provider
+    return create_model_provider
+
+
 def _architect_of(pipeline: HarnessPipeline) -> Any:
     """The pipeline's architect, or a planning-phase fallback one."""
     if pipeline._architect is not None:
@@ -298,15 +309,7 @@ def create_app(
                 # factory (the pipeline must not build around the injection).
                 resolved = provider
             else:
-                from harness.infrastructure.model_providers.fake import build_demo_provider
-
-                def factory(model_cfg: Any, _demo: bool = effective_demo) -> Any:
-                    """One provider per models-profile: per-agent model
-                    binding (architect on one profile, specialists on
-                    another) is resolved by the pipeline, not collapsed."""
-                    if _demo:
-                        return build_demo_provider(model_cfg)
-                    return create_model_provider(model_cfg)
+                factory = _service_provider_factory(effective_demo)
 
             pipelines[key] = HarnessPipeline(
                 repo_root=Path(repo_root),

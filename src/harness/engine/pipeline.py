@@ -18,6 +18,7 @@ eval time), Docker sandboxing (subprocess limits instead), web dashboard
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -31,6 +32,7 @@ from harness.agents.manager import (
     SpecialistSlot,
     assign_specialists,
     execution_batches,
+    rank_specialists,
     routing_breakdown,
 )
 from harness.agents.specialists import build_agent
@@ -41,6 +43,7 @@ from harness.engine.evidence import EvidencePack, build_summary
 from harness.engine.recovery import Executor, RecoveryLadder, Rerouter
 from harness.infrastructure.model_providers import ModelAuthError
 from harness.monitoring.metrics import MetricsCollector
+from harness.orchestration.messages import ErrorEscalation
 from harness.security.audit import AuditLog
 from harness.security.input_guard import detect_prompt_injection
 from harness.tools.execution import RunTestsTool, detect_test_runner
@@ -415,48 +418,34 @@ class HarnessPipeline:
         architect: ArchitectAgent,
         batch_no: int = 1,
     ) -> list[TaskResult]:
-        """Execute one file-disjoint batch, strictly sequentially.
+        """Execute one file-disjoint batch.
 
-        The batch structure exists so a future worktree fan-out can run its
-        members in parallel; until worktrees land, concurrent specialists
-        share ONE working tree (edits interleave, test runs race), so the
-        audit's §11 finding is honored by serializing inside the batch.
+        Batch members route through the Manager's LIVE ledger (review
+        finding #7): current_tasks/tokens_used update per task, team-average
+        load feeds §5.1 scoring, and L2 reassign picks the best-scoring
+        OTHER specialist instead of dict order (finding #8). Execution order
+        within a batch stays serial until per-agent provider isolation
+        lands (parallel wave, finding #11).
         """
         results: list[TaskResult] = []
 
-        from harness.orchestration.messages import ErrorEscalation
-
-        def make_reroute(agent_id: str) -> Rerouter:
-            """Genuine L2 re-route (audit §8): 'reassign' swaps to another
-            specialist; 'add collaborators' spawns one (bounded per run)."""
-
-            def reroute(task: Task, escalation: ErrorEscalation, guidance: str) -> Executor | None:
-                if "reassign" in guidance:
-                    alternative = next(
-                        (
-                            a
-                            for aid, a in self._agents.items()
-                            if aid != agent_id and aid not in self._coordination_ids
-                        ),
-                        None,
-                    )
-                    return alternative.execute_task if alternative else None
-                if "add collaborators" in guidance:
-                    collaborator = self._add_collaborator(agent_id, governor, pack, run_id)
-                    return collaborator.execute_task if collaborator else None
-                return None
-
-            return reroute
-
         async def run_one(subtask: SubTask) -> TaskResult:
             task = subtask.to_task()
-            chosen = assign_specialists(task, self._specialist_slots, team_average_tokens=0)
+            chosen = assign_specialists(
+                task, self._specialist_slots, team_average_tokens=self._team_average()
+            )
             agent_id = chosen[0] if chosen else next(iter(self._agents))
             agent = self._agents[agent_id]
             slot = next(
                 (s for s in self._specialist_slots if s.agent_id == agent_id),
                 None,
             )
+            # The Manager owns the assignment ledger (review finding #7):
+            # current_tasks rises now and falls on completion, so later
+            # tasks in the SAME batch route around busy specialists.
+            if self._manager is not None and hasattr(self._manager, "assign_task"):
+                with contextlib.suppress(ValueError):
+                    await self._manager.assign_task(task, agent_id)
             pack.trace(
                 {
                     "event": "specialist.assigned",
@@ -467,14 +456,18 @@ class HarnessPipeline:
                     "batch": batch_no,
                     # The Manager's delegation moment: the §5.1 factor
                     # contributions that put the task on this agent.
-                    "routing": routing_breakdown(task, slot) if slot else None,
+                    "routing": (
+                        routing_breakdown(task, slot, team_average_tokens=self._team_average())
+                        if slot
+                        else None
+                    ),
                 }
             )
             ladder = RecoveryLadder(
                 self._manager,
                 architect,
                 self._store,
-                reroute=make_reroute(agent_id),
+                reroute=self._make_reroute(agent_id, governor, pack, run_id),
                 on_event=pack.trace,
                 governor=governor,
                 run_id=run_id,
@@ -495,6 +488,15 @@ class HarnessPipeline:
             # Attribute the result to the agent that ACTUALLY finished the
             # work (an L2 reroute may have handed it to a collaborator).
             executor = getattr(ladder, "last_executor_agent", None) or agent
+            # Free the Manager's ledger: current_tasks falls, tokens accrue
+            # to the slot that did the work, the assignment is cleared.
+            if self._manager is not None and hasattr(self._manager, "acknowledge_completion"):
+                await self._manager.acknowledge_completion(
+                    task.id,
+                    getattr(executor, "agent_id", agent_id),
+                    tokens_used=max(0, getattr(executor, "traced_tokens", 0)),
+                    success=result.success,
+                )
             pack.trace(
                 {
                     "event": "specialist.result",
@@ -513,6 +515,48 @@ class HarnessPipeline:
         for subtask in batch:
             results.append(await run_one(subtask))
         return results
+
+    def _team_average(self) -> int:
+        """Live mean token spend across specialists: the load factor must
+        see REAL spend, not a hardcoded 0 (review finding #7)."""
+        spent = [s.tokens_used for s in self._specialist_slots if s.tokens_used > 0]
+        return sum(spent) // len(spent) if spent else 0
+
+    def _make_reroute(
+        self, agent_id: str, governor: BudgetGovernor, pack: EvidencePack, run_id: str
+    ) -> Rerouter:
+        """Genuine L2 re-route (audit §8 + review finding #8): 'reassign'
+        swaps to the best-scoring OTHER specialist - task-aware (specialty
+        match, availability, live load, capability), never dict order;
+        'add collaborators' spawns one (bounded per run)."""
+
+        def reroute(task: Task, escalation: ErrorEscalation, guidance: str) -> Executor | None:
+            if "reassign" in guidance:
+                candidates = [
+                    slot
+                    for slot in self._specialist_slots
+                    if slot.agent_id != agent_id and slot.agent_id not in self._coordination_ids
+                ]
+                ranked = rank_specialists(task, candidates, team_average_tokens=self._team_average())
+                target = self._agents.get(ranked[0][0].agent_id) if ranked else None
+                if target is None:
+                    # No scoreable slot: any non-coordination agent beats
+                    # dropping the task.
+                    target = next(
+                        (
+                            a
+                            for aid, a in self._agents.items()
+                            if aid != agent_id and aid not in self._coordination_ids
+                        ),
+                        None,
+                    )
+                return target.execute_task if target else None
+            if "add collaborators" in guidance:
+                collaborator = self._add_collaborator(agent_id, governor, pack, run_id)
+                return collaborator.execute_task if collaborator else None
+            return None
+
+        return reroute
 
     def _add_collaborator(
         self, primary_agent_id: str, governor: BudgetGovernor, pack: EvidencePack, run_id: str
@@ -548,14 +592,17 @@ class HarnessPipeline:
         agent.governor = governor
         agent.attach_tracer(pack.trace, run_id)
         self._agents[agent_id] = agent
-        self._specialist_slots.append(
-            SpecialistSlot(
-                agent_id=agent_id,
-                specialties=weak_specialties({"implementer"}),
-                available_tools={tool.name for tool in self._tools},
-                role="implementer",
-            )
+        collaborator_slot = SpecialistSlot(
+            agent_id=agent_id,
+            specialties=weak_specialties({"implementer"}),
+            available_tools={tool.name for tool in self._tools},
+            role="implementer",
         )
+        self._specialist_slots.append(collaborator_slot)
+        # The Manager's ledger must know the newcomer: availability scoring
+        # and L2 rerouting see it from the moment it spawns.
+        if self._manager is not None and hasattr(self._manager, "register_specialist"):
+            self._manager.register_specialist(collaborator_slot)
         pack.trace(
             {
                 "event": "specialist.collaborator_added",

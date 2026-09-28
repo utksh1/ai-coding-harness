@@ -247,6 +247,29 @@ class ManagerAgent(LLMAgent):
             f"assigned {task.id} -> {agent_id}",
         )
 
+    async def acknowledge_completion(
+        self, task_id: str, agent_id: str, tokens_used: int = 0, success: bool = True
+    ) -> None:
+        """Post-result bookkeeping: free the slot, accrue load, log it.
+
+        Without this the routing algorithm runs blind (review finding #7):
+        current_tasks would never fall, tokens_used would never rise, and
+        availability/load would score every slot identically forever. The
+        pipeline calls this after every task result - success or failure."""
+        slot = self.slots.get(agent_id)
+        if slot is not None:
+            slot.current_tasks = max(0, slot.current_tasks - 1)
+            slot.tokens_used += max(0, tokens_used)
+        self.assignments.pop(task_id, None)
+        remaining = self.store.load_global("assignments") or {}
+        remaining.pop(task_id, None)
+        self.store.save_global("assignments", remaining)
+        self.context_window.append(
+            "assistant",
+            f"task {task_id} finished by {agent_id} "
+            f"(success={success}, tokens={tokens_used})",
+        )
+
     async def monitor_progress(self) -> list[StatusUpdate]:
         """Poll specialists; active slots report load, idle slots report idle."""
         return [
