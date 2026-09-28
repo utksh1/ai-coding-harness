@@ -247,17 +247,22 @@ class HarnessPipeline:
         id. Left unset, the pipeline mints its own (eval-mode CLI behavior).
         """
         run_id = run_id or uuid.uuid4().hex[:12]
-        # Wall-clock rail (live finding: run.wall_clock_seconds was configured
+        # Wall-clock rails (live finding: run.wall_clock_seconds was configured
         # but never enforced - a rate-limited provider can starve a run for
-        # hours without spending the token budget). The governor raises
-        # RunDeadlineExceeded on every model call and stage boundary past the
-        # deadline; the finalize path below turns it into an honest
-        # run.end(success=false) with the stop reason.
+        # hours without spending the token budget). The wall clock is a STALL
+        # window - no recorded model progress for wall_clock_seconds trips it,
+        # so a throttled-but-productive run is never killed for being slow -
+        # and max_duration_seconds (default 4x the stall window) is the
+        # absolute runaway cap. The governor raises RunDeadlineExceeded on
+        # every model call and stage boundary past either deadline; the
+        # finalize path below turns it into an honest run.end(success=false)
+        # with the stop reason.
         governor = BudgetGovernor(
             self._store,
             self._config.budget,
             run_id,
             wall_clock_seconds=self._config.run.wall_clock_seconds,
+            max_duration_seconds=self._config.run.max_duration_seconds,
         )
         metrics = MetricsCollector(self._store, governor)
         pack = EvidencePack(

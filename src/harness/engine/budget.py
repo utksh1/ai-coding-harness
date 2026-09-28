@@ -12,6 +12,7 @@ the operating mode the rest of the harness must respect:
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from enum import StrEnum
 
 from harness.agents.task import TaskResult
@@ -24,11 +25,19 @@ class BudgetExhausted(RuntimeError):  # noqa: N818 - domain state name, not an e
 
 
 class RunDeadlineExceeded(BudgetExhausted):
-    """Wall-clock deadline exceeded (`run.wall_clock_seconds`).
+    """Wall-clock rail tripped (`run.wall_clock_seconds` / `run.max_duration_seconds`).
+
+    The wall clock is a STALL window: `wall_clock_seconds` is the maximum
+    time without recorded model progress (live finding: a throttled provider
+    can starve a run for hours without spending tokens - waiting in retry
+    backoff is exactly the "productive"-looking hang this rail exists to
+    kill). `max_duration_seconds` (default 4x the stall window) is the
+    absolute runaway cap from run start, so a run that keeps making real
+    progress still ends within a bounded multiple of the operator's dial.
 
     Subclasses `BudgetExhausted` so every existing graceful-stop catch site
     (agent loop, recovery ladder, pipeline finalize) applies unchanged; the
-    message distinguishes the two stop reasons.
+    message distinguishes which of the two wall clocks tripped.
     """
 
 
@@ -47,14 +56,26 @@ class BudgetGovernor:
         budget: BudgetConfig,
         correlation_id: str,
         wall_clock_seconds: float | None = None,
+        max_duration_seconds: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._store = store
         self._budget = budget
         self._correlation_id = correlation_id
+        self._clock = clock
         self._wall_clock_seconds = wall_clock_seconds
-        self._started_at = time.monotonic()
+        self._started_at = self._clock()
+        self._last_progress_at = self._started_at
+        # Absolute runaway cap; when unset it derives from the stall window
+        # so a single dial still bounds total run length (4x headroom: a
+        # genuinely productive but throttled run may legitimately outlast
+        # the stall window many times over - measured live at ~3 model
+        # calls/minute under upstream 429 throttling).
+        if max_duration_seconds is None and wall_clock_seconds is not None:
+            max_duration_seconds = 4.0 * wall_clock_seconds
+        self._max_duration_seconds = max_duration_seconds
         self._deadline = (
-            self._started_at + wall_clock_seconds if wall_clock_seconds is not None else None
+            self._started_at + max_duration_seconds if max_duration_seconds is not None else None
         )
         self._stop_reason = ""
 
@@ -68,10 +89,19 @@ class BudgetGovernor:
         return self._stop_reason
 
     def elapsed_seconds(self) -> float:
-        return time.monotonic() - self._started_at
+        return self._clock() - self._started_at
 
     def remaining_seconds(self) -> float | None:
-        return None if self._deadline is None else max(0.0, self._deadline - time.monotonic())
+        """Seconds left on the ABSOLUTE (duration) rail, if one is armed."""
+        return None if self._deadline is None else max(0.0, self._deadline - self._clock())
+
+    def seconds_since_progress(self) -> float:
+        """Seconds since the last recorded model call (stall-rail distance)."""
+        return self._clock() - self._last_progress_at
+
+    def note_progress(self) -> None:
+        """Refresh the stall window (called on every recorded model call)."""
+        self._last_progress_at = self._clock()
 
     def used_tokens(self) -> int:
         return self._store.token_usage(self._correlation_id).total_tokens
@@ -89,15 +119,29 @@ class BudgetGovernor:
     def check(self) -> None:
         """Raise when the run must stop. Cheap; call per step.
 
-        Two independent rails: the wall clock (`run.wall_clock_seconds`,
-        enforced since a throttled provider can starve the run without ever
-        spending tokens) and the token cap. Whichever trips first sets
-        `stop_reason` so the honest-failure path can report it.
+        Three rails, checked cheapest-deadliest first: the absolute duration
+        cap, the stall window (no model progress for `wall_clock_seconds`
+        - enforced since a throttled provider can starve the run in retry
+        backoff without ever spending tokens), and the token cap. Whichever
+        trips first sets `stop_reason` so the honest-failure path can report
+        it. Both wall-clock trips raise `RunDeadlineExceeded` with a
+        "wall clock exceeded:" prefix that says WHICH clock tripped.
         """
-        if self._deadline is not None and time.monotonic() >= self._deadline:
+        now = self._clock()
+        if self._deadline is not None and now >= self._deadline:
             self._stop_reason = (
-                f"wall clock exceeded: {self.elapsed_seconds():.0f}s >= "
-                f"{self._wall_clock_seconds:.0f}s limit"
+                f"wall clock exceeded: total run duration {self.elapsed_seconds():.0f}s "
+                f">= {self._max_duration_seconds:.0f}s absolute limit"
+            )
+            raise RunDeadlineExceeded(self._stop_reason)
+        if (
+            self._wall_clock_seconds is not None
+            and now - self._last_progress_at >= self._wall_clock_seconds
+        ):
+            self._stop_reason = (
+                f"wall clock exceeded: no model progress for "
+                f"{now - self._last_progress_at:.0f}s "
+                f"(stall limit {self._wall_clock_seconds:.0f}s)"
             )
             raise RunDeadlineExceeded(self._stop_reason)
         if self.used_tokens() >= self._budget.total_tokens:
@@ -120,10 +164,11 @@ class BudgetGovernor:
             raise BudgetExhausted(msg)
 
     def record(self, agent_id: str, model: str, prompt_tokens: int, completion_tokens: int) -> None:
-        """Append one model call to the ledger."""
+        """Append one model call to the ledger (and refresh the stall window)."""
         self._store.record_token_usage(
             self._correlation_id, agent_id, model, prompt_tokens, completion_tokens
         )
+        self._last_progress_at = self._clock()
 
     def exhausted_result(self, task_id: str, summary: str = "") -> TaskResult:
         """Honest failure result for a task stopped by the budget governor."""

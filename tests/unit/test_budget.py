@@ -73,17 +73,103 @@ def test_correlation_id_and_isolation(store) -> None:
     assert governor.used_tokens() == 15
 
 
-def test_wall_clock_deadline_raises_run_deadline(store) -> None:
+def test_wall_clock_stall_raises_run_deadline(store) -> None:
+    """No model progress for wall_clock_seconds -> stall trip (fake clock)."""
+    now = {"t": 0.0}
     governor = BudgetGovernor(
-        store, BudgetConfig(total_tokens=1000), "corr-wc", wall_clock_seconds=0.01
+        store,
+        BudgetConfig(total_tokens=1000),
+        "corr-wc",
+        wall_clock_seconds=0.01,
+        clock=lambda: now["t"],
     )
-    assert governor.remaining_seconds() is not None
-    time.sleep(0.02)
+    assert governor.remaining_seconds() is not None  # absolute rail armed (4x)
+    now["t"] = 0.02  # no progress since start -> stall window exceeded
     with pytest.raises(RunDeadlineExceeded, match="wall clock exceeded"):
         governor.check()
-    assert "wall clock exceeded" in governor.stop_reason
+    assert "stall limit" in governor.stop_reason
+    assert governor.remaining_seconds() == pytest.approx(0.02)  # 0.04 absolute - 0.02
+    assert governor.elapsed_seconds() == pytest.approx(0.02)
+    assert governor.seconds_since_progress() == pytest.approx(0.02)
+
+
+def test_progress_refreshes_stall_window(store) -> None:
+    """The rail kills starvation, not slowness: recorded model calls keep a
+    throttled-but-productive run alive past the stall window (live finding:
+    the duration-cap reading killed a real run mid-implementation at ~3
+    productive calls/minute under rolling 429 walls)."""
+    now = {"t": 0.0}
+    governor = BudgetGovernor(
+        store,
+        BudgetConfig(total_tokens=100_000),
+        "corr-live",
+        wall_clock_seconds=100.0,
+        clock=lambda: now["t"],
+    )
+    for t, record in [(50.0, True), (140.0, True), (230.0, True)]:
+        now["t"] = t
+        if record:
+            governor.record("a-1", "m", 10, 0)  # refreshes the stall window
+        governor.check()  # each gap is 90s < 100s stall -> never trips
+    assert governor.stop_reason == ""
+
+
+def test_duration_cap_trips_despite_progress(store) -> None:
+    """Absolute runaway cap: even a fully productive run ends within
+    max_duration_seconds (default 4x the stall window)."""
+    now = {"t": 0.0}
+    governor = BudgetGovernor(
+        store,
+        BudgetConfig(total_tokens=100_000),
+        "corr-dur",
+        wall_clock_seconds=100.0,
+        clock=lambda: now["t"],
+    )
+    for t in (100.0, 200.0, 300.0, 390.0):
+        now["t"] = t
+        governor.record("a-1", "m", 10, 0)  # stall window always fresh
+        governor.check()
+    now["t"] = 400.0  # 4x stall window since start
+    with pytest.raises(RunDeadlineExceeded, match="absolute limit"):
+        governor.check()
+    assert "total run duration" in governor.stop_reason
     assert governor.remaining_seconds() == 0.0
-    assert governor.elapsed_seconds() >= 0.02
+
+
+def test_explicit_duration_override_beats_derivation(store) -> None:
+    now = {"t": 0.0}
+    governor = BudgetGovernor(
+        store,
+        BudgetConfig(total_tokens=100_000),
+        "corr-ovr",
+        wall_clock_seconds=100.0,
+        max_duration_seconds=150.0,
+        clock=lambda: now["t"],
+    )
+    now["t"] = 120.0
+    governor.record("a-1", "m", 10, 0)  # progress 30s ago: stall is fine
+    now["t"] = 150.0
+    with pytest.raises(RunDeadlineExceeded, match="150s absolute limit"):
+        governor.check()
+
+
+def test_note_progress_extends_stall_window_without_tokens(store) -> None:
+    """Public heartbeat for non-model progress (tool-side activity): keeps
+    the run off the stall rail without touching the token ledger."""
+    now = {"t": 0.0}
+    governor = BudgetGovernor(
+        store,
+        BudgetConfig(total_tokens=100_000),
+        "corr-np",
+        wall_clock_seconds=100.0,
+        clock=lambda: now["t"],
+    )
+    now["t"] = 90.0
+    governor.note_progress()
+    now["t"] = 150.0  # 60s since the heartbeat, still under the 100s stall
+    governor.check()
+    assert governor.used_tokens() == 0
+    assert governor.seconds_since_progress() == pytest.approx(60.0)
 
 
 def test_run_deadline_is_a_budget_exhausted() -> None:
@@ -99,20 +185,30 @@ def test_no_wall_clock_never_deadlines(store) -> None:
 
 
 def test_deadline_checked_before_token_rail(store) -> None:
+    now = {"t": 0.0}
     governor = BudgetGovernor(
-        store, BudgetConfig(total_tokens=1), "corr-both", wall_clock_seconds=0.01
+        store,
+        BudgetConfig(total_tokens=1),
+        "corr-both",
+        wall_clock_seconds=0.01,
+        clock=lambda: now["t"],
     )
-    governor.record("a-1", "m", 50, 50)  # tokens over cap too
-    time.sleep(0.02)
+    governor.record("a-1", "m", 50, 50)  # tokens over cap too; t stays 0.0
+    now["t"] = 0.02  # 0.02s without progress -> stall (checked before tokens)
     with pytest.raises(RunDeadlineExceeded):
         governor.check()
 
 
 def test_exhausted_result_reports_wall_clock_reason(store) -> None:
+    now = {"t": 0.0}
     governor = BudgetGovernor(
-        store, BudgetConfig(total_tokens=1000), "corr-res", wall_clock_seconds=0.01
+        store,
+        BudgetConfig(total_tokens=1000),
+        "corr-res",
+        wall_clock_seconds=0.01,
+        clock=lambda: now["t"],
     )
-    time.sleep(0.02)
+    now["t"] = 0.02
     with pytest.raises(RunDeadlineExceeded):
         governor.check()
     result = governor.exhausted_result("task-9")

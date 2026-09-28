@@ -183,6 +183,16 @@ class RunConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     wall_clock_seconds: float = Field(default=1800.0, gt=0)
+    max_duration_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Absolute runaway cap from run start. Defaults to 4x "
+            "wall_clock_seconds. wall_clock_seconds itself is the STALL "
+            "window: max time without recorded model progress (a throttled "
+            "provider waiting in retry backoff is the hang this kills)."
+        ),
+    )
     max_steps: int = Field(default=200, ge=1)
     results_dir: str = "results"
 

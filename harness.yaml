@@ -84,9 +84,17 @@ logging:
   file_path: .harness/harness.log
 
 run:
-  # Rate-limited backends (throttled shim, 429 walls) need wall-clock
-  # headroom: measured ~20-30 productive model calls per 10 min under
-  # throttling, a full run needs 100+ calls.
+  # Wall-clock rails, two independent clocks (live-measured on a throttled
+  # upstream: ~3 productive model calls/minute under rolling 429 walls of
+  # ~10 minutes):
+  #   wall_clock_seconds   = STALL window. Trips only when NO model progress
+  #                          (successful model call) has been recorded for
+  #                          this long - a rate-limited provider starving the
+  #                          run in retry backoff is exactly the hang this
+  #                          kills; a slow-but-productive run never trips it.
+  #   max_duration_seconds = absolute runaway cap from run start (defaults
+  #                          to 4x the stall window when unset).
   wall_clock_seconds: 3600
+  max_duration_seconds: 14400
   max_steps: 60
   results_dir: results
