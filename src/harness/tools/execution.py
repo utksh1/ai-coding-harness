@@ -14,11 +14,11 @@ import contextlib
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from harness.security.input_guard import sanitize_path, validate_command
+from harness.security.sandbox import network_egress_violation, sandbox_env
 from harness.tools.base import AsyncExecutableTool, Tool, ToolResult, ToolTier
 
 MAX_OUTPUT_BYTES = 20_000
@@ -110,7 +110,7 @@ class RunTestsTool(AsyncExecutableTool):
                 text=True,
                 timeout=self._timeout,
                 check=False,
-                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                env=sandbox_env(),
             )
         except subprocess.TimeoutExpired:
             return ToolResult(
@@ -144,7 +144,7 @@ class RunTestsTool(AsyncExecutableTool):
                     cwd=self._root,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                    env=sandbox_env(),
                 )
             except OSError as exc:
                 return ToolResult(success=False, error=f"cannot spawn test runner: {exc}")
@@ -170,9 +170,15 @@ class RunTestsTool(AsyncExecutableTool):
 class CodeExecutionTool(AsyncExecutableTool):
     """code_execution: sandboxed command execution (Tier 3).
 
-    No shell, whitelisted argv[0], project-dir confinement, 30s CPU limit,
-    512 MB memory cap, output truncation. Network isolation is best-effort
-    at the process level (the eval host enforces the real boundary).
+    No shell, whitelisted argv[0] PLUS network-egress argument checks,
+    project-dir confinement, 30s CPU limit, 512 MB memory cap, output
+    truncation, and an allowlist child environment with dead proxies.
+
+    HONEST BOUNDARY (review finding #12): this is process-level defense in
+    depth, NOT a container. A determined payload can escape it (crafting
+    env, spawning processes); the eval host's isolation is the real
+    boundary. What this stops is the COMMON case: credentials leaking into
+    untrusted test output and accidental network egress.
     """
 
     name, tier = "code_execution", ToolTier.ADVANCED
@@ -213,7 +219,14 @@ class CodeExecutionTool(AsyncExecutableTool):
             or not all(isinstance(arg, str) for arg in command)
         ):
             return ["'command' must be a non-empty array of strings"]
-        return validate_command(self.ALLOWED_COMMANDS, command)
+        errors = validate_command(self.ALLOWED_COMMANDS, command)
+        # Arg-level egress check (review finding #12): the first-executable
+        # allowlist alone misses 'git clone', 'pip install requests', or
+        # fetchers hidden deeper in argv.
+        violation = network_egress_violation(command, allow_network=False)
+        if violation:
+            errors = [*errors, violation]
+        return errors
 
     def check_permissions(self, context: dict[str, Any]) -> bool:
         return context.get("model_tier", 1) >= self.tier.value
@@ -233,12 +246,7 @@ class CodeExecutionTool(AsyncExecutableTool):
                 timeout=self._timeout,
                 check=False,
                 preexec_fn=_limits_preexec if os.name == "posix" else None,
-                env={
-                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                    "HOME": tempfile.gettempdir(),
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                    "LANG": "C",
-                },
+                env=sandbox_env(allow_network=False, extra={"LANG": "C"}),
             )
         except subprocess.TimeoutExpired:
             return ToolResult(
@@ -264,12 +272,7 @@ class CodeExecutionTool(AsyncExecutableTool):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 preexec_fn=_limits_preexec if os.name == "posix" else None,
-                env={
-                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                    "HOME": tempfile.gettempdir(),
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                    "LANG": "C",
-                },
+                env=sandbox_env(allow_network=False, extra={"LANG": "C"}),
             )
         except OSError as exc:
             return ToolResult(success=False, error=f"cannot spawn command: {exc}")

@@ -538,7 +538,7 @@ graph TB
     end
     
     subgraph Execution["EXECUTION ISOLATION LAYER"]
-        E1["Code Execution Sandbox<br/>────────────────────<br/>Isolation:<br/>• Containerized environment<br/>• No network access<br/>• CPU time limit: 30s<br/>• Memory limit: 512 MB<br/>• Temporary filesystem only<br/>────────────────────<br/>Action: Terminate if violated"]
+        E1["Code Execution Sandbox<br/>────────────────────<br/>Process-level defense in depth:<br/>• No shell; argv[0] allowlist<br/>• Network-egress argument checks<br/>• CPU time limit: 30s<br/>• Memory limit: 512 MB<br/>• ALLOWLIST child env (no keys)<br/>• Dead proxies when network off<br/>────────────────────<br/>HONEST BOUNDARY: not a container;<br/>the eval host enforces real isolation"]
         
         E2["Tool Permission Gating<br/>──────────────────────<br/>Control:<br/>• Tier-based access matrix<br/>• Low-tier models restricted<br/>• Dangerous tools need Tier 3<br/>• Temporary escalation logged<br/>──────────────────────<br/>Action: Deny or grant with logging"]
     end
@@ -690,3 +690,26 @@ flowchart LR
 **Created**: September 2026  
 **Repository**: https://github.com/MRiARC/ai-coding-harness  
 **Design Specification**: See [DESIGN_SPEC.md](DESIGN_SPEC.md) for complete 5,294-line implementation details
+
+## Security boundary (honest statement)
+
+The harness executes commands and test suites from arbitrary repositories. Its
+process-level sandbox (`harness/security/sandbox.py`) is **defense in depth,
+not a container**:
+
+- **Environment allowlist**: child processes (test runs, code execution)
+  receive only PATH/HOME/LANG/locale variables — never the harness's API keys,
+  gateway URLs, or tokens. The common leak (a target-repo test printing
+  `os.environ`) sees nothing.
+- **Dead proxies**: when `tools.allow_network_commands: false`, proxy-aware
+  clients point at a closed local port — accidental egress fails fast.
+- **Argument-level egress checks**: `git clone`, `pip install`, `npm install`,
+  and fetchers (`curl`, `wget`, `ssh`, ...) anywhere in argv are rejected —
+  the argv[0] allowlist alone misses them.
+- **Resource limits**: 30s CPU, 512 MB memory, project-dir confinement, no
+  shell, output truncation.
+
+What this does **not** stop: a determined payload that crafts its own
+environment or spawns escape processes. The deployment host's isolation
+(container/VM/namespace) is the real boundary for that class — the harness
+sandbox exists so the ordinary case never leaks credentials or phones home.
