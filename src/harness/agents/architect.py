@@ -33,7 +33,15 @@ PLAN_SCHEMA = (
     '"risks": [str], "needs_collaboration": bool, '
     '"reproduction_test": str, "allow_test_edits": bool}'
 )
-VERDICT_SCHEMA = '{"approved": bool, "issues": [str], "summary": str}'
+VERDICT_SCHEMA = (
+    '{"approved": bool, "issues": [str], "summary": str, '
+    '"criteria_dispositions": [{"criterion": str, "satisfied": bool, "evidence": str}]}'
+)
+"""The verdict must judge EVERY acceptance criterion it can see: one
+`criteria_dispositions` entry per criterion (satisfied + evidence). The
+verification pipeline mechanically checks coverage - a verdict that skips
+criteria fails stage 6 even when `approved` is true (review finding #4:
+acceptance must be proven, not asserted)."""
 
 
 class RepositoryProfile(BaseModel):
@@ -90,12 +98,21 @@ class Plan(BaseModel):
     )
 
 
+class CriterionDisposition(BaseModel):
+    """One acceptance criterion judged by the final review."""
+
+    criterion: str
+    satisfied: bool
+    evidence: str = ""
+
+
 class ReviewVerdict(BaseModel):
     """Final review outcome with evidence-backed findings."""
 
     approved: bool
     issues: list[str] = Field(default_factory=list)
     summary: str = ""
+    criteria_dispositions: list[CriterionDisposition] = Field(default_factory=list)
 
 
 class ArchitectAgent(LLMAgent):
@@ -149,17 +166,31 @@ class ArchitectAgent(LLMAgent):
         context = _ReviewContext(plan, evidence)
         chunks, unreviewed = split_diff_chunks(diff)
         verdicts: list[ReviewVerdict] = []
-        for index, chunk in enumerate(chunks):
+        if chunks:
+            for index, chunk in enumerate(chunks):
+                data = await self.structured_call(
+                    "Reply with JSON matching: " + VERDICT_SCHEMA,
+                    context.chunk_prompt(chunk, index, len(chunks)),
+                    VERDICT_SCHEMA,
+                )
+                verdicts.append(ReviewVerdict.model_validate(data))
+        else:
+            # No diff to review: acceptance criteria are still judged - from
+            # the verification evidence and task outcomes. A synthetic
+            # auto-approve here would let criteria pass unjudged (review
+            # finding #4); the criteria-coverage gate in stage 6 requires a
+            # real disposition for every criterion either way.
             data = await self.structured_call(
                 "Reply with JSON matching: " + VERDICT_SCHEMA,
-                context.chunk_prompt(chunk, index, len(chunks)),
+                context.chunk_prompt(
+                    "(no diff: judge each acceptance criterion strictly from the "
+                    "verification evidence and task outcomes above)",
+                    0,
+                    0,
+                ),
                 VERDICT_SCHEMA,
             )
             verdicts.append(ReviewVerdict.model_validate(data))
-        if not chunks:
-            verdicts.append(
-                ReviewVerdict(approved=True, issues=[], summary="no changed files to review")
-            )
         return _merge_verdicts(verdicts, unreviewed)
 
     async def reframe(self, task: Task, escalation_message: str) -> Task:
@@ -245,6 +276,11 @@ class _ReviewContext:
         return (
             f"Review chunk {index + 1}/{total} of this diff against the "
             "acceptance criteria and evidence. Reply with JSON only.\n"
+            "For EVERY criterion you can judge from this chunk, emit one "
+            "criteria_dispositions entry {criterion, satisfied, evidence}; "
+            "criteria not judgeable from this chunk may be omitted (they are "
+            "judged from other chunks, and the pipeline fails any criterion "
+            "left unjudged overall).\n"
             f"{self.preamble}\n\nDIFF CHUNK:\n{chunk}"
         )
 
@@ -257,7 +293,21 @@ def _merge_verdicts(verdicts: list[ReviewVerdict], unreviewed_files: list[str]) 
     if unreviewed_files:
         issues.append("diff not fully reviewed (over chunk budget): " + ", ".join(unreviewed_files))
     summary = "; ".join(v.summary for v in verdicts if v.summary)
-    return ReviewVerdict(approved=approved, issues=issues, summary=summary)
+    # Criterion dispositions merge across chunks: a criterion judged in ANY
+    # chunk counts as judged, and a single unsatisfied verdict wins (a
+    # criterion is satisfied only where EVERY judgment of it is).
+    by_criterion: dict[str, CriterionDisposition] = {}
+    for verdict in verdicts:
+        for disposition in verdict.criteria_dispositions:
+            previous = by_criterion.get(disposition.criterion)
+            if previous is None or previous.satisfied:
+                by_criterion[disposition.criterion] = disposition
+    return ReviewVerdict(
+        approved=approved,
+        issues=issues,
+        summary=summary,
+        criteria_dispositions=list(by_criterion.values()),
+    )
 
 
 def build_architect(

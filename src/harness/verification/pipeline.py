@@ -388,11 +388,43 @@ class VerificationPipeline:
         verdict: ReviewVerdict = await architect.review(
             diff, plan, evidence=stage_report(self.results)
         )
+        evidence: dict[str, Any] = {
+            "issues": verdict.issues,
+            "criteria_dispositions": [
+                {"criterion": d.criterion, "satisfied": d.satisfied, "evidence": d.evidence}
+                for d in verdict.criteria_dispositions
+            ],
+        }
+        # Machine-checked acceptance coverage (review finding #4): the LLM's
+        # `approved` is necessary but NOT sufficient - every plan criterion
+        # must carry an explicit disposition, and every disposition must be
+        # satisfied. A verdict that skips criteria fails here even when it
+        # says approved.
+        expected = {c for st in plan.subtasks for c in st.acceptance_criteria}
+        judged = {d.criterion for d in verdict.criteria_dispositions}
+        missing = sorted(expected - judged)
+        unsatisfied = sorted(d.criterion for d in verdict.criteria_dispositions if not d.satisfied)
+        if missing:
+            evidence["missing_criteria"] = missing
+            return StageResult(
+                "6-final-review",
+                False,
+                "acceptance criteria not individually addressed: " + "; ".join(missing[:5]),
+                evidence=evidence,
+            )
+        if unsatisfied:
+            evidence["unsatisfied_criteria"] = unsatisfied
+            return StageResult(
+                "6-final-review",
+                False,
+                "acceptance criteria not satisfied: " + "; ".join(unsatisfied[:5]),
+                evidence=evidence,
+            )
         return StageResult(
             "6-final-review",
             verdict.approved,
             verdict.summary or ("approved" if verdict.approved else "; ".join(verdict.issues)),
-            evidence={"issues": verdict.issues},
+            evidence=evidence,
         )
 
 

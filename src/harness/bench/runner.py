@@ -34,7 +34,11 @@ PLAN_JSON = (
     '"acceptance_criteria": ["greet returns hello"], "depends_on": []}], '
     '"risks": [], "needs_collaboration": false}'
 )
-VERDICT_JSON = '{"approved": true, "issues": [], "summary": "greet works"}'
+VERDICT_JSON = (
+    '{"approved": true, "issues": [], "summary": "greet works", '
+    '"criteria_dispositions": [{"criterion": "greet returns hello", '
+    '"satisfied": true, "evidence": "diff changes greet to return hello"}]}'
+)
 
 
 def fixture_root() -> Path:

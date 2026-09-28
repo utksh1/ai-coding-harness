@@ -67,7 +67,9 @@ async def test_pipeline_all_pass(repo, fake_model_config) -> None:
     provider = FakeProvider(
         fake_model_config,
         responses=[
-            ModelResponse(content='{"approved": true, "issues": [], "summary": "solid"}'),
+            ModelResponse(
+                content='{"approved": true, "issues": [], "summary": "solid", "criteria_dispositions": [{"criterion": "works", "satisfied": true, "evidence": "tests pass"}]}',
+            ),
         ],
     )
     architect = ArchitectAgent(

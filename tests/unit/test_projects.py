@@ -154,7 +154,7 @@ PLAN = (
     '"complexity": 1, "files": ["app.py"], "acceptance_criteria": ["ok"], '
     '"depends_on": []}], "risks": [], "needs_collaboration": false}'
 )
-VERDICT = '{"approved": true, "issues": [], "summary": "ok"}'
+VERDICT = '{"approved": true, "issues": [], "summary": "ok", "criteria_dispositions": [{"criterion": "ok", "satisfied": true, "evidence": "task result confirms"}]}'
 
 
 def _scripted(fake_model_config: Any, loop: bool = False) -> Any:

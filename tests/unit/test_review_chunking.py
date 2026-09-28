@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 
 from harness.agents.architect import ArchitectAgent, Plan, split_diff_chunks
+from harness.agents.llm_agent import StoreWindow
 from harness.config import BudgetConfig, ModelConfig
 from harness.engine.budget import BudgetGovernor
 from harness.infrastructure.context_store import MemoryContextStore
@@ -56,10 +57,13 @@ def _architect(script: list[ModelResponse]) -> tuple[ArchitectAgent, FakeProvide
     return agent, provider
 
 
-def _verdict(approved: bool, issues: list[str] | None = None) -> ModelResponse:
-    return ModelResponse(
-        content=json.dumps({"approved": approved, "issues": issues or [], "summary": "chunk"})
-    )
+def _verdict(
+    approved: bool, issues: list[str] | None = None, dispositions: list[dict] | None = None
+) -> ModelResponse:
+    payload: dict = {"approved": approved, "issues": issues or [], "summary": "chunk"}
+    if dispositions is not None:
+        payload["criteria_dispositions"] = dispositions
+    return ModelResponse(content=json.dumps(payload))
 
 
 def test_split_diff_chunks_single_small_diff() -> None:
@@ -125,9 +129,163 @@ async def test_review_overflow_fails_gate_honestly() -> None:
     assert len(provider.calls) == 5  # budget respected
 
 
-async def test_review_empty_diff_skips_calls() -> None:
-    agent, provider = _architect([])
+async def test_review_empty_diff_judges_criteria_from_evidence() -> None:
+    """Empty diff is no longer an auto-approve (review finding #4).
+
+    Criteria are judged from the verification evidence via exactly ONE
+    structured call - never zero: a synthetic verdict would let acceptance
+    criteria pass unjudged on empty-diff runs."""
+    agent, provider = _architect(
+        [
+            _verdict(
+                approved=True,
+                dispositions=[{"criterion": "greet returns hello", "satisfied": True}],
+            )
+        ]
+    )
     verdict = await agent.review("", PLAN)
     assert verdict.approved
-    assert "no changed files" in verdict.summary
-    assert provider.calls == []
+    assert len(provider.calls) == 1
+    assert "judge each acceptance criterion" in provider.calls[0]["messages"][-1]["content"]
+    assert [d.criterion for d in verdict.criteria_dispositions] == ["greet returns hello"]
+
+
+def test_merge_dispositions_across_chunks_single_unsatisfied_wins() -> None:
+    """A criterion judged satisfied in one chunk and not in another FAILS:
+    acceptance is proven only where every judgment agrees."""
+    from harness.agents.architect import CriterionDisposition, ReviewVerdict, _merge_verdicts
+
+    v1 = ReviewVerdict(
+        approved=True,
+        criteria_dispositions=[
+            CriterionDisposition(criterion="c1", satisfied=True, evidence="a"),
+            CriterionDisposition(criterion="c2", satisfied=True, evidence="a"),
+        ],
+    )
+    v2 = ReviewVerdict(
+        approved=True,
+        criteria_dispositions=[
+            CriterionDisposition(criterion="c2", satisfied=False, evidence="b"),
+            CriterionDisposition(criterion="c3", satisfied=True, evidence="b"),
+        ],
+    )
+    merged = _merge_verdicts([v1, v2], [])
+    by_criterion = {d.criterion: d.satisfied for d in merged.criteria_dispositions}
+    assert by_criterion == {"c1": True, "c2": False, "c3": True}
+
+
+async def test_stage6_requires_disposition_for_every_criterion(tmp_path) -> None:
+    """The machine check: approved=True is NOT enough when a criterion is
+    unjudged (or judged unsatisfied) - stage 6 fails honestly."""
+    from harness.agents.architect import Plan
+    from harness.verification.pipeline import VerificationPipeline
+
+    plan = Plan.model_validate(
+        {
+            "issue_summary": "s",
+            "complexity": 1,
+            "subtasks": [
+                {
+                    "id": "st-1",
+                    "title": "t",
+                    "description": "d",
+                    "specialty": "localization",
+                    "files": [],
+                    "acceptance_criteria": ["c1", "c2"],
+                    "depends_on": [],
+                }
+            ],
+        }
+    )
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
+    (tmp_path / "test_ok.py").write_text("def test_ok():\n    assert True\n")
+    store = MemoryContextStore()
+    governor = BudgetGovernor(store, BudgetConfig(total_tokens=100_000), "corr-cov")
+    provider = FakeProvider(
+        ModelConfig(provider="fake", name="fake-model", api_key_env="AI_API_KEY"),
+        responses=[
+            ModelResponse(
+                content=json.dumps(
+                    {
+                        "approved": True,
+                        "issues": [],
+                        "summary": "looks good",
+                        "criteria_dispositions": [
+                            {"criterion": "c1", "satisfied": True, "evidence": "x"}
+                        ],
+                    }
+                )
+            ),
+        ],
+    )
+    architect = ArchitectAgent(
+        agent_id="arch",
+        model_config={},
+        tools=[],
+        context_window=StoreWindow(store, "arch", "planning"),
+        provider=provider,
+        store=store,
+        governor=governor,
+    )
+    results = await VerificationPipeline(tmp_path).run("", plan, architect)
+    stage6 = next(r for r in results if r.name == "6-final-review")
+    assert not stage6.passed
+    assert "not individually addressed: c2" in stage6.detail
+    assert stage6.evidence["missing_criteria"] == ["c2"]
+
+
+async def test_stage6_fails_unsatisfied_criterion(tmp_path) -> None:
+    from harness.agents.architect import Plan
+    from harness.verification.pipeline import VerificationPipeline
+
+    plan = Plan.model_validate(
+        {
+            "issue_summary": "s",
+            "complexity": 1,
+            "subtasks": [
+                {
+                    "id": "st-1",
+                    "title": "t",
+                    "description": "d",
+                    "specialty": "localization",
+                    "files": [],
+                    "acceptance_criteria": ["c1"],
+                    "depends_on": [],
+                }
+            ],
+        }
+    )
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
+    (tmp_path / "test_ok.py").write_text("def test_ok():\n    assert True\n")
+    store = MemoryContextStore()
+    governor = BudgetGovernor(store, BudgetConfig(total_tokens=100_000), "corr-unsat")
+    provider = FakeProvider(
+        ModelConfig(provider="fake", name="fake-model", api_key_env="AI_API_KEY"),
+        responses=[
+            ModelResponse(
+                content=json.dumps(
+                    {
+                        "approved": True,
+                        "issues": [],
+                        "summary": "seems done",
+                        "criteria_dispositions": [
+                            {"criterion": "c1", "satisfied": False, "evidence": "no covering test"}
+                        ],
+                    }
+                )
+            ),
+        ],
+    )
+    architect = ArchitectAgent(
+        agent_id="arch",
+        model_config={},
+        tools=[],
+        context_window=StoreWindow(store, "arch", "planning"),
+        provider=provider,
+        store=store,
+        governor=governor,
+    )
+    results = await VerificationPipeline(tmp_path).run("", plan, architect)
+    stage6 = next(r for r in results if r.name == "6-final-review")
+    assert not stage6.passed
+    assert "not satisfied: c1" in stage6.detail

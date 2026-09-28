@@ -164,6 +164,13 @@ def build_demo_provider(config: Any) -> FakeProvider:
                     "approved": True,
                     "issues": [],
                     "summary": "demo verdict (scripted)",
+                    "criteria_dispositions": [
+                        {
+                            "criterion": "demo completes",
+                            "satisfied": True,
+                            "evidence": "demo_output.py written (scripted)",
+                        }
+                    ],
                 }
             )
         ),

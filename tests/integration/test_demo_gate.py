@@ -63,7 +63,16 @@ def _plan_json(reproduction: bool) -> str:
 
 
 def _verdict_json() -> str:
-    return json.dumps({"approved": True, "issues": [], "summary": "add is correct now"})
+    return json.dumps(
+        {
+            "approved": True,
+            "issues": [],
+            "summary": "add is correct now",
+            "criteria_dispositions": [
+                {"criterion": "add(2, 3) == 5", "satisfied": True, "evidence": "calculator.py now adds"}
+            ],
+        }
+    )
 
 
 def _apply_edit_call(path: str, search: str, replace: str) -> ModelResponse:
