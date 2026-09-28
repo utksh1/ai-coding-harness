@@ -108,9 +108,9 @@ func TestCreateTaskIsAsyncAndRecords(t *testing.T) {
 			t.Fatalf("task decode failed: %v", err)
 		}
 		events = taskBody.Events
-		return len(events) == 1
+		return len(events) == 2 // run.meta + task.completed
 	})
-	completed, _ := events[0]["result"].(map[string]any)
+	completed, _ := events[1]["result"].(map[string]any)
 	if completed["outcome"] != "VERIFIED" {
 		t.Fatalf("proxied result missing: %v", events)
 	}
@@ -351,10 +351,13 @@ func TestCreateTaskPassesRunIDThrough(t *testing.T) {
 			t.Fatalf("task decode failed: %v", err)
 		}
 		events = taskBody.Events
-		return len(events) == 1
+		return len(events) == 2
 	})
-	if events[0]["event"] != "task.completed" {
-		t.Fatalf("expected one task.completed event, got %v", events)
+	if events[0]["event"] != "run.meta" {
+		t.Fatalf("expected run.meta first, got %v", events)
+	}
+	if events[1]["event"] != "task.completed" {
+		t.Fatalf("expected task.completed last, got %v", events)
 	}
 }
 
