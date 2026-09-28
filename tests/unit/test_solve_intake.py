@@ -183,7 +183,7 @@ def test_demo_provider_is_labeled(fake_model_config) -> None:
     from harness.infrastructure.model_providers.fake import build_demo_provider
 
     provider = build_demo_provider(fake_model_config)
-    assert len(provider._responses) == 4  # profile, plan, specialist, verdict
+    assert len(provider._responses) == 5  # profile, plan, write tool call, specialist, verdict
 
 
 async def test_demo_provider_tails_the_verdict_on_extra_calls(fake_model_config) -> None:

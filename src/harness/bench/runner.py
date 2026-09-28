@@ -28,9 +28,9 @@ PROFILE_JSON = (
 )
 PLAN_JSON = (
     '{"issue_summary": "greeting missing", "complexity": 3, "subtasks": [{'
-    '"id": "st-1", "title": "add greeting", '
+    '"id": "st-1", "title": "fix the greeting", '
     '"description": "app.greet() should return hello", '
-    '"specialty": "verification", "complexity": 2, "files": ["app.py"], '
+    '"specialty": "refactoring", "complexity": 2, "files": ["app.py"], '
     '"acceptance_criteria": ["greet returns hello"], "depends_on": []}], '
     '"risks": [], "needs_collaboration": false}'
 )
@@ -49,7 +49,7 @@ def build_fixture(root: Path | None = None) -> Path:
         shutil.rmtree(root)
     root.mkdir(parents=True)
     (root / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
-    (root / "app.py").write_text("def greet():\n    return 'hello'\n", encoding="utf-8")
+    (root / "app.py").write_text("def greet():\n    return ''\n", encoding="utf-8")  # the bug
     (root / "test_greet.py").write_text(
         "from app import greet\n\n\ndef test_greet():\n    assert greet() == 'hello'\n",
         encoding="utf-8",
@@ -99,6 +99,7 @@ async def run_once(fixture: Path, results_dir: Path, issue: str) -> dict[str, An
     from harness.engine.pipeline import HarnessPipeline
     from harness.infrastructure.context_store import SQLiteContextStore
     from harness.infrastructure.model_providers import FakeProvider, ModelResponse
+    from harness.infrastructure.model_providers.base import ToolCall
     from harness.security.audit import AuditLog
 
     config = build_bench_config(
@@ -109,7 +110,21 @@ async def run_once(fixture: Path, results_dir: Path, issue: str) -> dict[str, An
         responses=[
             ModelResponse(content=PROFILE_JSON),  # architect.analyze
             ModelResponse(content=PLAN_JSON),  # architect.decompose
-            ModelResponse(content="TASK_COMPLETE: verified greet() returns hello"),
+            ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="bench-fix",
+                        name="apply_edit",
+                        arguments={
+                            "path": "app.py",
+                            "search": "return ''",
+                            "replace": "return 'hello'",
+                        },
+                    )
+                ],
+            ),
+            ModelResponse(content="TASK_COMPLETE: greet() now returns hello"),
             ModelResponse(content=VERDICT_JSON),  # architect.review
         ],
     )

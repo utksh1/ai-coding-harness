@@ -301,11 +301,22 @@ async def test_unmarked_finish_triggers_nudge_then_accepts(store, fake_model_con
     assert len(nudges) == 2  # bounded nudging
 
 
-async def test_unmarked_finishes_exhaust_then_best_effort(store, fake_model_config) -> None:
+async def test_unmarked_finishes_exhaust_then_honest_failure(store, fake_model_config) -> None:
+    """The false-VERIFIED killer, codified honestly (review finding #1).
+
+    An agent that never sends TASK_COMPLETE has NOT completed the task, no
+    matter how confident its prose sounds: five "I'm thinking" replies end
+    the subtask FAILED (feeding the recovery ladder), never 'successfully'.
+    The verification gates judge the WORK - but a completion claim must
+    first exist for anything to be judged, and an empty diff can no longer
+    slip through the gates either (see the self-check no-op gate).
+    """
     provider = FakeProvider(fake_model_config, responses=[_text("thinking") for _ in range(5)])
     agent = _agent(store, provider, tools=[EchoTool()], max_steps=6)
     result = await agent.execute_task(TASK)
-    assert result.success  # gates, not the agent's claim, decide the truth
+    assert result.success is False
+    assert result.error is not None
+    assert "task_not_completed" in result.error
     assert "thinking" in result.summary
 
 

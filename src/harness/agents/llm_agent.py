@@ -632,14 +632,25 @@ class LLMAgent(BaseAgent):
                 return content, True, None
             # A reply with neither tool calls nor the marker is the model
             # pausing, not finishing (audit §6): nudge it back to work a
-            # bounded number of times, then accept its last word - the
-            # verification gates, not the model's word, judge the truth.
+            # bounded number of times. If it STILL never claims completion,
+            # the task is NOT completed - five "I'm thinking" replies must
+            # not end a subtask 'successfully' (they used to, which fed the
+            # false-VERIFIED path: empty diff + green suite + review PASS).
+            # The verification gates judge the WORK, but a completion claim
+            # must first exist to be judged; unmarked exhaustion is an
+            # honest failure the recovery ladder can retry or escalate.
             if unmarked_finishes < MAX_UNMARKED_NUDGES:
                 unmarked_finishes += 1
                 self.context_window.append("user", _NUDGE)
                 continue
             self._maybe_compress(task.id)
-            return content, True, None
+            return (
+                content,
+                False,
+                "task_not_completed: agent never replied with "
+                f"'{FINAL_MARKER}' after {MAX_UNMARKED_NUDGES} nudges; last "
+                "reply carried neither tool calls nor completion",
+            )
         self._maybe_compress(task.id)
         return _STEP_LIMIT_ERROR, False, _STEP_LIMIT_ERROR
 

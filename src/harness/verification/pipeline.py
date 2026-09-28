@@ -32,6 +32,70 @@ Tracer = Callable[[dict[str, Any]], None]
 """Optional event sink (the evidence pack's trace) for live stage events."""
 
 
+NON_CODE_SPECIALTIES = frozenset(
+    {"verification", "code-review", "localization", "code-navigation", "coordination", "architecture"}
+)
+"""Specialties whose subtasks plausibly produce analysis, not edits. Every
+other specialty (backend-api, database, frontend, refactoring, security,
+devops, documentation, testing, ...) implies a working-tree change; an empty
+diff after such a plan is a no-op run, not a pass."""
+
+
+def plan_requires_changes(plan: Plan | None) -> bool:
+    """Does this plan expect the working tree to change at all?
+
+    Mechanical no-op gate: a subtask that declares target files, or carries
+    a code-implying specialty, makes an empty diff a FAILURE. Only plans that
+    are entirely analysis-flavored (locate/review/verify) accept an empty
+    diff as legitimate."""
+    if plan is None:
+        return False
+    return any(
+        bool(subtask.files) or subtask.specialty not in NON_CODE_SPECIALTIES
+        for subtask in plan.subtasks
+    )
+
+
+def _planned_file_coverage(plan: Plan | None, diff_files: list[str]) -> dict[str, list[str]]:
+    """Which subtasks' declared files the diff actually touched.
+
+    Advisory evidence for the final review: the architect compares the plan's
+    predicted file set against what really changed instead of trusting the
+    implementer's summary."""
+    if plan is None:
+        return {}
+    touched = set(diff_files)
+    covered: dict[str, list[str]] = {"addressed": [], "untouched_declared_files": []}
+    for subtask in plan.subtasks:
+        if subtask.files and not (set(subtask.files) & touched):
+            covered["untouched_declared_files"].append(
+                f"{subtask.id}: {', '.join(subtask.files[:3])}"
+            )
+        elif subtask.files:
+            covered["addressed"].append(subtask.id)
+    return covered
+
+
+def _git_measurable(root: Path) -> bool:
+    """Can `git diff` produce a meaningful answer in this directory?
+
+    Subdirectories of a git repo count (fixtures checked out inside a parent
+    repo): `rev-parse --is-inside-work-tree` resolves through parents.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):  # pragma: no cover - git missing
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
+
+
 @dataclass
 class StageResult:
     name: str
@@ -186,12 +250,37 @@ class VerificationPipeline:
     ) -> StageResult:
         files = self.changed_files(diff)
         if not files:
-            return StageResult("2-self-check", True, "no changed files to check")
+            # No-op gate (false-VERIFIED killer): a plan that expects code
+            # changes and produces an empty diff has demonstrated nothing,
+            # no matter what the agent's summary claims. Analysis-only plans
+            # (locate/review/verify) legitimately change nothing, and a
+            # non-git target has no measurable diff at all (stated honestly,
+            # never silently passed off as "clean").
+            if not _git_measurable(self._root):
+                return StageResult(
+                    "2-self-check", True, "diff not measurable (target is not a git repo)"
+                )
+            if plan_requires_changes(plan):
+                return StageResult(
+                    "2-self-check",
+                    False,
+                    "no changed files: implementation subtasks produced no diff "
+                    "(requested change not demonstrated)",
+                    evidence={"no_diff": True},
+                )
+            return StageResult("2-self-check", True, "no changed files (analysis-only plan)")
         tool = SyntaxCheckTool(self._root)
         result = tool.execute(paths=files)
-        return StageResult(
-            "2-self-check", result.success, result.error or result.output, evidence={"files": files}
-        )
+        coverage = _planned_file_coverage(plan, files)
+        evidence: dict[str, Any] = {"files": files}
+        evidence.update(coverage)
+        detail = result.error or result.output
+        if coverage.get("untouched_declared_files"):
+            detail = (
+                (detail + " | " if detail else "")
+                + f"{len(coverage['untouched_declared_files'])} subtask(s) with untouched declared files"
+            )
+        return StageResult("2-self-check", result.success, detail, evidence=evidence)
 
     async def _stage_local_tests(
         self, diff: str, plan: Plan | None, architect: ArchitectAgent | None
@@ -226,6 +315,7 @@ class VerificationPipeline:
                     )
                     repro_ok = repro.success
                     evidence["reproduction_passes_after"] = repro_ok
+                    evidence["reproduction_failing_before"] = baseline.reproduction_failing_before
                     evidence["reproduction_output_tail"] = (repro.output or repro.error or "")[
                         -800:
                     ]
@@ -233,6 +323,18 @@ class VerificationPipeline:
                 if regressions:
                     passed = False
                     detail = f"baseline regressions: {', '.join(regressions[:5])}"
+                elif (
+                    baseline.reproduction_test
+                    and baseline.reproduction_failing_before is False
+                ):
+                    # Reproduction invariant: a test that already passed at
+                    # baseline proves nothing about the patch. VERIFIED
+                    # requires FAIL-before -> PASS-after, not PASS -> PASS.
+                    passed = False
+                    detail = (
+                        "reproduction test was already passing at baseline "
+                        f"(invalid reproduction evidence): {baseline.reproduction_test}"
+                    )
                 elif baseline.reproduction_test and not repro_ok:
                     passed = False
                     detail = f"reproduction test still failing: {baseline.reproduction_test}"

@@ -11,6 +11,7 @@ from typing import Any
 from harness.infrastructure.model_providers.base import (
     ModelProvider,
     ModelResponse,
+    ToolCall,
     _approx_tokens,
 )
 
@@ -96,8 +97,11 @@ class FakeProvider(ModelProvider):
 def build_demo_provider(config: Any) -> FakeProvider:
     """Credential-free demo: a canned end-to-end script for any issue.
 
-    The pipeline labels the resulting evidence DEMO; never use during
-    evaluation - this exists so judges can see the full flow offline.
+    The script performs a REAL edit (filesystem_write of demo_output.py) so
+    the run carries an actual diff - the no-op gate would (correctly) fail
+    a demo that only claims completion in prose. The pipeline labels the
+    resulting evidence DEMO; never use during evaluation - this exists so
+    judges can see the full flow offline.
     """
     import json
 
@@ -122,11 +126,11 @@ def build_demo_provider(config: Any) -> FakeProvider:
                     "subtasks": [
                         {
                             "id": "st-1",
-                            "title": "address the reported issue",
+                            "title": "write the demo marker module",
                             "description": "demo-mode placeholder change",
-                            "specialty": "verification",
+                            "specialty": "refactoring",
                             "complexity": 1,
-                            "files": ["README.md"],
+                            "files": ["demo_output.py"],
                             "acceptance_criteria": ["demo completes"],
                             "depends_on": [],
                         }
@@ -136,7 +140,24 @@ def build_demo_provider(config: Any) -> FakeProvider:
                 }
             )
         ),
-        ModelResponse(content="TASK_COMPLETE: demo-mode specialist finished (scripted)"),
+        ModelResponse(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id="demo-write",
+                    name="filesystem_write",
+                    arguments={
+                        "path": "demo_output.py",
+                        "content": (
+                            '"""Demo-mode marker written by the scripted specialist."""\n'
+                            'DEMO_MARKER = "foreman-demo"\n'
+                        ),
+                        "mode": "create",
+                    },
+                )
+            ],
+        ),
+        ModelResponse(content="TASK_COMPLETE: demo-mode specialist wrote demo_output.py (scripted)"),
         ModelResponse(
             content=json.dumps(
                 {
