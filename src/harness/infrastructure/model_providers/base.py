@@ -5,8 +5,12 @@ wire format and back. All providers:
 
 - read the API key from the env var named by `ModelConfig.api_key_env`
   (never from config files),
-- retry transient failures (timeouts, 429/5xx) with exponential backoff and
-  `Retry-After` awareness; auth failures (401/403) fail immediately,
+- retry transient failures (timeouts, 5xx) with exponential backoff;
+  **429s get a dedicated, patient ladder** (`rate_limit_*` knobs) because a
+  rate limit is a healthy server asking us to wait - a rolling upstream
+  wall (live finding: ~10-20 min of consecutive 429s) must be waited out,
+  not failed. 429 attempts do NOT consume the transient ladder. Auth
+  failures (401/402/403) fail immediately,
 - return usage counts so the budget governor can meter every call.
 """
 
@@ -27,6 +31,9 @@ from harness.config import ModelConfig
 logger = structlog.get_logger(__name__)
 
 RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504}
+
+RATE_LIMIT_STATUS = 429
+"""Handled by the dedicated patient ladder, never the transient one."""
 
 
 class ModelAuthError(Exception):
@@ -122,13 +129,34 @@ class ModelProvider(ABC):
         tools: list[dict[str, Any]] | None = None,
         **overrides: Any,
     ) -> ModelResponse:
-        """Send one chat-completion request with retries; never returns partials."""
+        """Send one chat-completion request with retries; never returns partials.
+
+        Two ladders (live finding: a hard 429 wall lasting 10-20 minutes
+        outlived the transient ladder's ~45s of patience and killed an
+        otherwise-healthy run as a transport error):
+
+        - transient (timeouts, transport errors, 5xx): `max_retries` attempts
+          with `backoff_base_seconds * 2^attempt` backoff - fast failures,
+          fast give-up.
+        - rate limit (429): `rate_limit_max_retries` attempts with
+          `rate_limit_backoff_base_seconds * 2^n` capped at
+          `rate_limit_max_wait_seconds`, `Retry-After` honored. Defaults
+          total ~35 minutes of patience - deliberately under the run's
+          stall window (`run.wall_clock_seconds`) so the governor, not the
+          transport, is the honest backstop for a truly dead backend.
+        """
         api_key = self._resolve_api_key()
         payload = self._payload(messages, tools)
         payload.update(overrides)
 
+        rate_max = int(self._config.extra.get("rate_limit_max_retries", 12))
+        rate_base = float(self._config.extra.get("rate_limit_backoff_base_seconds", 15.0))
+        rate_cap = float(self._config.extra.get("rate_limit_max_wait_seconds", 240.0))
+
+        attempt = 0  # transient ladder: timeouts / transport errors / 5xx
+        rate_attempt = 0  # dedicated 429 ladder; never consumes `attempt`
         last_error: Exception | None = None
-        for attempt in range(self._config.max_retries + 1):
+        while attempt <= self._config.max_retries:
             try:
                 if self._client is not None:
                     response = await self._client.post(
@@ -145,13 +173,15 @@ class ModelProvider(ABC):
                         )
             except httpx.TimeoutException as exc:
                 last_error = exc
-                logger.warning("model request timed out", attempt=attempt + 1)
-                await self._backoff(attempt)
+                attempt += 1
+                logger.warning("model request timed out", attempt=attempt)
+                await self._backoff(attempt - 1)
                 continue
             except httpx.HTTPError as exc:
                 last_error = exc
-                logger.warning("model request failed", attempt=attempt + 1, error=str(exc))
-                await self._backoff(attempt)
+                attempt += 1
+                logger.warning("model request failed", attempt=attempt, error=str(exc))
+                await self._backoff(attempt - 1)
                 continue
 
             if response.status_code in {401, 403, 402}:
@@ -162,16 +192,44 @@ class ModelProvider(ABC):
                     f"{self._config.provider} rejected credentials "
                     f"(HTTP {response.status_code}): {response.text[:300]}"
                 )
+            if response.status_code == RATE_LIMIT_STATUS:
+                rate_attempt += 1
+                if rate_attempt > rate_max:
+                    msg = (
+                        f"rate limited after {rate_attempt} attempts (HTTP 429); "
+                        f"patience budget of {rate_max} retries exhausted"
+                    )
+                    raise RuntimeError(msg)
+                retry_after = response.headers.get("retry-after")
+                delay = float(retry_after) if retry_after and retry_after.isdigit() else None
+                wait = (
+                    delay
+                    if delay is not None
+                    else min(rate_base * (2 ** (rate_attempt - 1)), rate_cap)
+                )
+                wait += random.uniform(0, 1.0)
+                logger.warning(
+                    "rate limited; waiting out the window",
+                    status=response.status_code,
+                    rate_attempt=rate_attempt,
+                    wait_seconds=round(wait, 1),
+                )
+                last_error = httpx.HTTPStatusError(
+                    f"HTTP {response.status_code}", request=response.request, response=response
+                )
+                await asyncio.sleep(wait)
+                continue
             if response.status_code in RETRYABLE_STATUS:
+                attempt += 1
                 retry_after = response.headers.get("retry-after")
                 delay = float(retry_after) if retry_after and retry_after.isdigit() else None
                 logger.warning(
                     "rate limited or server error",
                     status=response.status_code,
-                    attempt=attempt + 1,
+                    attempt=attempt,
                     retry_after=retry_after,
                 )
-                await self._backoff(attempt, delay)
+                await self._backoff(attempt - 1, delay)
                 last_error = httpx.HTTPStatusError(
                     f"HTTP {response.status_code}", request=response.request, response=response
                 )

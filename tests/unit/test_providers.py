@@ -124,7 +124,12 @@ async def test_retryable_statuses_eventually_succeed(monkeypatch, status: int) -
         name="m",
         api_key_env="K",
         max_retries=3,
-        extra={"backoff_base_seconds": 0.001},
+        extra={
+            "backoff_base_seconds": 0.001,
+            # 429 goes down the patient ladder: make it instant for the test
+            "rate_limit_backoff_base_seconds": 0.001,
+            "rate_limit_max_wait_seconds": 0.001,
+        },
     )
     client = _retry_transport([status, 200])
     provider = OpenAICompatibleProvider(config, client=client)
@@ -264,12 +269,117 @@ async def test_retry_after_header_overrides_backoff(monkeypatch) -> None:
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     provider = OpenAICompatibleProvider(
-        ModelConfig(provider="openai", name="m", api_key_env="K", max_retries=1),
+        ModelConfig(
+            provider="openai",
+            name="m",
+            api_key_env="K",
+            max_retries=1,
+            extra={"rate_limit_max_retries": 1},
+        ),
         client=client,
     )
-    with pytest.raises(RuntimeError, match="attempts"):
+    with pytest.raises(RuntimeError, match="rate limited"):
         await provider.generate(MSGS)
     await client.aclose()
+
+
+# --- dedicated 429 ladder (live finding: a 10-20 minute upstream 429 wall
+# outlived the transient ladder and killed a healthy run) ---------------------
+
+
+async def test_rate_limit_wall_is_waited_out(monkeypatch) -> None:
+    """A long 429 wall dissolves and the call succeeds - never a transport error."""
+    monkeypatch.setenv("K", "v")
+    client = _retry_transport([429] * 6 + [200])
+    provider = OpenAICompatibleProvider(
+        ModelConfig(
+            provider="openai",
+            name="m",
+            api_key_env="K",
+            max_retries=1,  # the OLD ladder would have died on attempt 2
+            extra={
+                "rate_limit_max_retries": 12,
+                "rate_limit_backoff_base_seconds": 0.001,
+                "rate_limit_max_wait_seconds": 0.001,
+            },
+        ),
+        client=client,
+    )
+    response = await provider.generate(MSGS)
+    assert response.content == "ok"
+
+
+async def test_rate_limit_patience_is_bounded(monkeypatch) -> None:
+    monkeypatch.setenv("K", "v")
+    client = _retry_transport([429])
+    provider = OpenAICompatibleProvider(
+        ModelConfig(
+            provider="openai",
+            name="m",
+            api_key_env="K",
+            max_retries=5,  # irrelevant: 429s never consume this ladder
+            extra={
+                "rate_limit_max_retries": 2,
+                "rate_limit_backoff_base_seconds": 0.001,
+                "rate_limit_max_wait_seconds": 0.001,
+            },
+        ),
+        client=client,
+    )
+    with pytest.raises(RuntimeError, match="rate limited after 3 attempts"):
+        await provider.generate(MSGS)
+
+
+async def test_rate_limit_never_consumes_transient_ladder(monkeypatch) -> None:
+    """429s wait on their own budget: a 5xx AFTER the wall still gets the full
+    transient ladder (with the old shared counter this sequence failed)."""
+    monkeypatch.setenv("K", "v")
+    client = _retry_transport([429, 429, 500, 500, 200])
+    provider = OpenAICompatibleProvider(
+        ModelConfig(
+            provider="openai",
+            name="m",
+            api_key_env="K",
+            max_retries=2,  # exactly the two 500s - and nothing else
+            extra={
+                "backoff_base_seconds": 0.001,
+                "rate_limit_backoff_base_seconds": 0.001,
+                "rate_limit_max_wait_seconds": 0.001,
+            },
+        ),
+        client=client,
+    )
+    response = await provider.generate(MSGS)
+    assert response.content == "ok"
+
+
+async def test_rate_limit_backoff_is_capped(monkeypatch) -> None:
+    monkeypatch.setenv("K", "v")
+    waits: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr("harness.infrastructure.model_providers.base.asyncio.sleep", fake_sleep)
+    client = _retry_transport([429] * 8)
+    provider = OpenAICompatibleProvider(
+        ModelConfig(
+            provider="openai",
+            name="m",
+            api_key_env="K",
+            extra={
+                "rate_limit_backoff_base_seconds": 10.0,
+                "rate_limit_max_wait_seconds": 45.0,
+            },
+        ),
+        client=client,
+    )
+    with pytest.raises(RuntimeError, match="rate limited"):
+        await provider.generate(MSGS)
+    capped = [w for w in waits if w > 46.0]  # cap + 1s jitter headroom
+    assert not capped, f"waits exceeded cap+jitter: {capped}"
+    # exponential shape: 10, 20, 40, then capped at 45 (+jitter)
+    assert waits[0] < 11.5 and waits[1] < 21.5 and waits[2] < 41.5
 
 
 async def test_fake_provider_pass_through_seams(fake_model_config) -> None:
