@@ -39,6 +39,12 @@ foreman start --demo  # orchestrator :8000 + gateway :8080, daemonized & supervi
 foreman web           # the web cockpit (chat sessions, org tree, gates, diff)
 foreman tui           # the Go TUI cockpit (same contract, in the terminal)
 
+# The web cockpit is a multi-view app: Chat / Projects / Models.
+#   Projects — open a folder straight from the GUI (filesystem browser →
+#              register → ACTIVE project; runs always execute there)
+#   Models   — settings-based model management: add/edit/remove profiles,
+#              bind ANY sub-agent to ANY model individually, reset to yaml
+
 foreman projects add ~/code/my-app        # register a repo (git state enriched)
 foreman run "fix the off-by-one in parser" --repo ~/code/my-app --model luna
                       # submits a run through the gateway; prints the run id
@@ -121,9 +127,20 @@ docker compose -f platform/docker-compose.yml up --build   # redis + orchestrato
   step counters and live activity; tabs for the plan board, per-agent tool-call
   log, activity feed, six verification gates and the final diff. Offline replay:
   `go run ./cmd/tui --replay web/events.sample-collab.jsonl`
-- **Web cockpit** (`http://localhost:8080/`): the same hierarchy in the browser —
-  kanban plan board, delegation routing breakdown (40/20/20/20), tool-call log,
-  timeline with auto-scroll, gate stepper, diff viewer, launcher.
+- **Web cockpit** (`http://localhost:8080/`): a multi-view app —
+  - *Chat*: the agent hierarchy in the browser — kanban plan board,
+    delegation routing breakdown (40/20/20/20), tool-call log, timeline with
+    auto-scroll, gate stepper, diff viewer, launcher with project/model
+    pickers, chat sessions with follow-ups and stop.
+  - *Projects*: **open the agent in a folder** — a filesystem browser
+    (breadcrumbs, path bar, hidden toggle) registers the chosen folder and
+    makes it the ACTIVE project; cards show git branch/dirty state, the
+    live run, and per-project run history with verdicts.
+  - *Models*: settings-based model management — profiles (yaml-seeded vs
+    runtime-managed badges), add/edit/remove, per-agent bindings (change
+    any sub-agent's model individually; `default` follows the run picker),
+    reset-to-yaml. Changes apply to the NEXT run with no restart; keys are
+    env var NAMES — a key value never crosses the API.
   Offline replay: `http://localhost:8080/?replay=events.luna-run.jsonl`
 
 **Engine quality loops** (what keeps a flailing model on course — live-run
