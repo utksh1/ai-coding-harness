@@ -9,6 +9,7 @@ is an optional `harness[platform]` add-on.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -26,6 +27,7 @@ from harness.infrastructure.context_store import create_context_store
 from harness.infrastructure.logging import get_logger
 from harness.infrastructure.model_providers import create_model_provider
 from harness.service.events import RedisEventPublisher
+from harness.service.projects import ProjectStore, run_history
 
 logger = get_logger(__name__)
 
@@ -48,6 +50,11 @@ class ExecuteRequest(BaseModel):
     task: dict[str, Any]
 
 
+class ProjectRequest(BaseModel):
+    path: str = Field(min_length=1)
+    name: str | None = None
+
+
 class RunRequest(BaseModel):
     issue: str = Field(min_length=1)
     repo_root: str = "."
@@ -55,6 +62,22 @@ class RunRequest(BaseModel):
     run_id: str | None = None
     """Gateway-supplied id: threaded through the pipeline so the task, the
     streamed events, and the evidence directory share ONE id."""
+    model_profile: str = "default"
+    """Which `models:` entry powers this run (default/gemini/luna/...).
+    Unknown names fall back to `default` so a stale cockpit profile never
+    400s a run."""
+    followup_of: str | None = None
+    """Prior run id in the same repo: its summary + patch stats are prepended
+    to the issue so the architect continues the session instead of starting
+    cold (chat-style continuation, Codex-like)."""
+
+
+class CancelRequest(BaseModel):
+    run_id: str = Field(min_length=1)
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
 
 
 EVIDENCE_FILES = (
@@ -65,6 +88,62 @@ EVIDENCE_FILES = (
     "baseline.json",
 )
 """Whitelist of evidence-pack files exposed over HTTP (no traversal risk)."""
+
+
+FOLLOWUP_CONTEXT_MAX_CHARS = 1800
+"""Prior-run context budget prepended to a follow-up issue: enough to carry
+the verdict, the summary, and what changed; not enough to smuggle a whole
+patch into the prompt."""
+
+
+def _followup_context(
+    run_roots: dict[str, str], followup_of: str, results_dir: str
+) -> str | None:
+    """Build the continuation block for a follow-up run.
+
+    Reads the prior run's evidence pack (summary.md + patch.diff + the
+    run.end verdict from its event trace). Returns None when the prior run
+    is unknown or left no pack - a follow-up to a vanished run degrades to
+    a plain fresh issue rather than an error."""
+    from harness.service.projects import _run_verdict
+
+    if not _safe_run_id(followup_of):
+        return None
+    repo_root = run_roots.get(followup_of)
+    if repo_root is None:
+        return None
+    pack_dir = Path(repo_root) / results_dir / followup_of
+    if not pack_dir.is_dir():
+        return None
+    parts = [f"CONTINUATION of run {followup_of} in this repository."]
+    parts.append(f"Previous verdict: {_run_verdict(pack_dir)}.")
+    evidence_found = False
+    try:
+        summary = (pack_dir / "summary.md").read_text(encoding="utf-8").strip()
+        if summary:
+            evidence_found = True
+            parts.append(
+                "Previous run summary (what was done, what was left):\n"
+                + summary[:FOLLOWUP_CONTEXT_MAX_CHARS // 2]
+            )
+    except OSError:
+        pass
+    try:
+        diff = (pack_dir / "patch.diff").read_text(encoding="utf-8")
+        files = sum(1 for line in diff.splitlines() if line.startswith("diff --git "))
+        additions = sum(1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+        deletions = sum(1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---"))
+        if files:
+            evidence_found = True
+            parts.append(
+                f"Working tree already carries the previous patch: {files} file(s), "
+                f"+{additions}/-{deletions} lines. Do NOT redo finished work."
+            )
+    except OSError:
+        pass
+    # Only a verdict and nothing else is not continuation evidence: a pack
+    # with no summary and no patch degrades to a plain fresh issue.
+    return "\n\n".join(parts) if evidence_found else None
 
 
 def _safe_run_id(run_id: str) -> bool:
@@ -161,6 +240,8 @@ def create_app(
 
     pipelines: dict[str, HarnessPipeline] = {}
     run_roots: dict[str, str] = _load_run_roots()
+    projects = ProjectStore()
+    active_run_tasks: dict[str, asyncio.Task[Any]] = {}
     # One pipeline run per repo at a time: the gateway retries /agent/run
     # after transport hiccups, and a retried POST landing while the original
     # run still lives would spawn a SECOND pipeline on the SAME working tree
@@ -170,21 +251,33 @@ def create_app(
     # when retries SHOULD be allowed.
     active_repo_runs: dict[str, str] = {}
 
+    def _resolve_model(profile_name: str) -> Any:
+        """Model config for a named profile; unknown names fall back to
+        `default` (a stale cockpit picker must never 400 a run)."""
+        cfg = _config()
+        return cfg.models.get(profile_name) or cfg.models["default"]
+
     def _pipeline(
-        repo_root: str, event_sink: Any = None, demo: bool | None = None
+        repo_root: str,
+        event_sink: Any = None,
+        demo: bool | None = None,
+        model_profile: str = "default",
     ) -> HarnessPipeline:
-        """One shared pipeline per (repo root, mode): agent/manager state must
-        persist across requests (assign -> status -> execute).
+        """One shared pipeline per (repo root, profile, mode): agent/manager
+        state must persist across requests (assign -> status -> execute).
 
         `demo` forces the scripted provider for THIS cache entry - the
         per-request checkbox must not silently hit the real model because a
-        real provider was cached first (integration finding).
+        real provider was cached first (integration finding). Model profiles
+        participate in the key: two profiles on one repo are different
+        agents with different providers.
         """
-        key = f"{repo_root}:demo" if demo else repo_root
+        key = f"{repo_root}:{model_profile}:demo" if demo else f"{repo_root}:{model_profile}"
         if key not in pipelines:
             cfg = _config()
             store = create_context_store(cfg.storage)
-            key_env = cfg.models["default"].api_key_env
+            model_cfg = _resolve_model(model_profile)
+            key_env = model_cfg.api_key_env
             has_key = bool(
                 os.environ.get(key_env)
                 or os.environ.get("AI_API_KEY")
@@ -195,15 +288,15 @@ def create_app(
             effective_demo = (
                 demo
                 or (os.environ.get("HARNESS_DEMO") == "1")
-                or (not has_key and cfg.models["default"].provider != "fake")
+                or (not has_key and model_cfg.provider != "fake")
             )
             resolved: Any
             if effective_demo and provider is None:
                 from harness.infrastructure.model_providers.fake import build_demo_provider
 
-                resolved = build_demo_provider(cfg.models["default"])
+                resolved = build_demo_provider(model_cfg)
             else:
-                resolved = provider or create_model_provider(cfg.models["default"])
+                resolved = provider or create_model_provider(model_cfg)
             pipelines[key] = HarnessPipeline(
                 repo_root=Path(repo_root),
                 config=cfg,
@@ -247,6 +340,62 @@ def create_app(
                 if agent.enabled
             ]
         }
+
+    @app.get("/api/models")
+    async def models() -> dict[str, Any]:
+        """Available model profiles (name + provider + model id; NEVER keys).
+
+        The cockpits' model picker renders from this: switching a run from
+        the local shim to gemini/luna is a dropdown, not a yaml edit."""
+        cfg = _config()
+        return {
+            "default_profile": "default",
+            "profiles": [
+                {"profile": name, "provider": m.provider, "model": m.name}
+                for name, m in sorted(cfg.models.items())
+            ],
+        }
+
+    @app.post("/api/projects")
+    async def register_project(request: ProjectRequest) -> dict[str, Any]:
+        try:
+            project = projects.register(request.path, request.name)
+        except ValueError as exc:
+            return {"registered": False, "error": str(exc)}
+        return {"registered": True, "project": project}
+
+    @app.get("/api/projects")
+    async def list_projects() -> dict[str, Any]:
+        return {
+            "projects": [
+                {**p, "active_run": active_repo_runs.get(p["path"])}
+                for p in projects.list_projects()
+            ]
+        }
+
+    @app.get("/api/projects/{project_id}")
+    async def project_detail(project_id: str) -> dict[str, Any]:
+        project = projects.detail(project_id)
+        if project is None:
+            return {"found": False, "error": f"unknown project {project_id}"}
+        return {
+            "found": True,
+            "project": {**project, "active_run": active_repo_runs.get(project["path"])},
+            "runs": run_history(project["path"], _config().run.results_dir),
+        }
+
+    @app.delete("/api/projects/{project_id}")
+    async def unregister_project(project_id: str) -> dict[str, Any]:
+        return {"removed": projects.unregister(project_id)}
+
+    @app.get("/api/projects/{project_id}/resolve")
+    async def resolve_project(project_id: str) -> dict[str, Any]:
+        """Project id (or raw path) -> absolute repo root: the cockpit's
+        project picker talks ids, /agent/run wants a path."""
+        resolved = projects.resolve(project_id)
+        if resolved is None:
+            return {"found": False, "error": f"unknown project {project_id}"}
+        return {"found": True, "path": resolved}
 
     @app.post("/agent/architect/analyze")
     async def analyze(request: AnalyzeRequest) -> dict[str, Any]:
@@ -342,10 +491,14 @@ def create_app(
         active_repo_runs[request.repo_root] = run_id
         _remember_run_root(run_roots, run_id, request.repo_root)
         _save_run_roots(run_roots)
+        model_cfg = _resolve_model(request.model_profile)
         pipeline = _pipeline(
-            request.repo_root, event_sink=publisher.sink_for(run_id), demo=request.demo_mode or None
+            request.repo_root,
+            event_sink=publisher.sink_for(run_id),
+            demo=request.demo_mode or None,
+            model_profile=request.model_profile,
         )
-        key_env = _config().models["default"].api_key_env
+        key_env = model_cfg.api_key_env
         has_key = bool(
             os.environ.get(key_env)
             or os.environ.get("AI_API_KEY")
@@ -356,15 +509,58 @@ def create_app(
         demo = (
             request.demo_mode
             or (os.environ.get("HARNESS_DEMO") == "1")
-            or (not has_key and _config().models["default"].provider != "fake")
+            or (not has_key and model_cfg.provider != "fake")
         )
-        try:
-            outcome = await pipeline.run(
-                request.issue,
-                demo_mode=demo,
+        # Chat-style continuation: a follow-up carries the prior run's
+        # verdict + summary + patch footprint so the architect continues the
+        # session instead of re-planning blind.
+        issue_text = request.issue
+        context = _followup_context(run_roots, request.followup_of or "", _config().run.results_dir)
+        if context:
+            issue_text = f"{context}\n\n---\n\nFOLLOW-UP REQUEST: {request.issue}"
+            logger.info(
+                "followup context attached",
                 run_id=run_id,
-                event_sink=publisher.sink_for(run_id),
+                followup_of=request.followup_of,
+                context_chars=len(context),
             )
+        # Cancellation surface: the pipeline runs as a tracked asyncio task
+        # so POST /agent/cancel can stop it mid-flight (chat stop button).
+        run_task: asyncio.Task[Any] | None = None
+        try:
+            run_task = asyncio.ensure_future(
+                pipeline.run(
+                    issue_text,
+                    demo_mode=demo,
+                    run_id=run_id,
+                    event_sink=publisher.sink_for(run_id),
+                )
+            )
+            active_run_tasks[run_id] = run_task
+            outcome = await run_task
+        except asyncio.CancelledError:
+            if run_task is not None and run_task.cancelled():
+                # Cancelled via /agent/cancel: finalize honestly, never hang.
+                publisher.publish(
+                    run_id,
+                    {
+                        "event": "run.failed",
+                        "run_id": run_id,
+                        "error": "CANCELLED by user",
+                        "stage": "cancel",
+                    },
+                )
+                publisher.publish(
+                    run_id, {"event": "run.end", "run_id": run_id, "success": False, "stop_reason": "cancelled"}
+                )
+                return {
+                    "run_id": run_id,
+                    "success": False,
+                    "outcome": "CANCELLED: run stopped by user",
+                    "evidence_path": "",
+                    "flags": ["cancelled"],
+                }
+            raise  # pragma: no cover - handler-task cancel (client drop)
         except Exception as exc:  # transport death mid-run: fail honestly, never hang
             logger.error("agent run crashed", run_id=run_id, error=str(exc)[:300])
             publisher.publish(
@@ -379,6 +575,7 @@ def create_app(
                 "flags": [f"transport error: {type(exc).__name__}"],
             }
         finally:
+            active_run_tasks.pop(run_id, None)
             if active_repo_runs.get(request.repo_root) == run_id:
                 active_repo_runs.pop(request.repo_root, None)
         return {
@@ -388,6 +585,23 @@ def create_app(
             "evidence_path": str(outcome.evidence_path),
             "flags": outcome.flags,
         }
+
+    @app.post("/agent/cancel")
+    async def cancel_run(request: CancelRequest) -> dict[str, Any]:
+        """Stop a live run: the chat 'stop' button.
+
+        Cancels the pipeline's asyncio task; the /agent/run handler observes
+        the cancellation, emits run.failed/run.end, and answers its (patient,
+        detached) caller honestly. Unknown or already-finished runs are
+        reported as such - cancellation is idempotent."""
+        run_id = request.run_id
+        if not _safe_run_id(run_id):
+            return {"cancelled": False, "error": "invalid run_id"}
+        task = active_run_tasks.get(run_id)
+        if task is None or task.done():
+            return {"cancelled": False, "detail": f"run {run_id} is not active"}
+        task.cancel()
+        return {"cancelled": True, "run_id": run_id}
 
     @app.get("/evidence/latest")
     async def evidence_latest(repo_root: str = ".") -> dict[str, Any]:

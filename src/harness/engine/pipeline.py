@@ -218,7 +218,15 @@ class HarnessPipeline:
         if demo_mode:
             flags.append("DEMO MODE: scripted model responses (illustrative only)")
         pack.trace(
-            {"event": "run.start", "run_id": run_id, "flags": flags, "issue": issue_text[:2000]}
+            {
+                "event": "run.start",
+                "run_id": run_id,
+                "flags": flags,
+                "issue": issue_text[:2000],
+                # Session management (platform P4): the cockpit's run list
+                # attributes each run to its repo without a registry lookup.
+                "repo_root": str(self._repo_root),
+            }
         )
         self._audit.append("pipeline", "run.start", run_id, {"flags": len(flags)})
 
