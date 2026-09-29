@@ -485,6 +485,63 @@ def test_run_endpoint_fails_gracefully_on_transport_death(
     assert end["success"] is False and end["run_id"] == "boom-1"
 
 
+class _RailStoppedProvider:
+    """A provider whose first call raises a rail stop (RunDeadlineExceeded).
+
+    Live finding (run eaa09546): the stall rail fired during PLANNING and
+    propagated out of pipeline.run() on the first attempt (correct - rail
+    stops never burn stage retries), but the service mapped it to a generic
+    "model transport error" with no stop_reason on run.end.
+    """
+
+    def __init__(self) -> None:
+        from harness.engine.budget import RunDeadlineExceeded
+
+        self._exc = RunDeadlineExceeded(
+            "wall clock exceeded: no model progress for 3600s (stall limit 3600s)"
+        )
+
+    async def generate(self, *args, **kwargs):
+        raise self._exc
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_run_endpoint_maps_planning_rail_stop_to_budget_outcome(
+    demo_repo: Path, fake_model_config
+) -> None:
+    """A rail stop during planning lands as the honest budget-governed outcome:
+    budget.exhausted event + run.end(stop_reason) + NOT VERIFIED line - not a
+    transport error."""
+    fake_redis = FakeRedis()
+    app = create_app(
+        config=_service_config(),
+        provider=_RailStoppedProvider(),
+        redis_client=fake_redis,
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/agent/run",
+        json={"issue": "x", "repo_root": str(demo_repo / "target"), "run_id": "rail-1"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["run_id"] == "rail-1"
+    assert "NOT VERIFIED" in body["outcome"]
+    assert "wall clock exceeded" in body["outcome"]
+    assert "budget governor" in body["flags"][0]
+    payloads = [json.loads(message) for _, message in fake_redis.published]
+    kinds = [p["event"] for p in payloads]
+    assert "budget.exhausted" in kinds and "run.end" in kinds
+    exhausted = next(p for p in payloads if p["event"] == "budget.exhausted")
+    assert "stall limit" in exhausted["reason"]
+    end = next(p for p in payloads if p["event"] == "run.end")
+    assert end["success"] is False
+    assert "stall limit" in end["stop_reason"]
+
+
 def test_evidence_latest_endpoint(demo_repo: Path, fake_model_config) -> None:
     app = create_app(config=_service_config(), provider=_scripted_provider(fake_model_config))
     client = TestClient(app)

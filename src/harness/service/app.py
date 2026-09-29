@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from harness import __version__
 from harness.agents.prompts import ROLE_PRESETS
 from harness.config import HarnessConfig
+from harness.engine.budget import BudgetExhausted
 from harness.engine.evidence import EvidencePack
 from harness.engine.pipeline import HarnessPipeline
 from harness.infrastructure.context_store import create_context_store
@@ -780,6 +781,45 @@ def create_app(
                     "flags": ["cancelled"],
                 }
             raise  # pragma: no cover - handler-task cancel (client drop)
+        except BudgetExhausted as exc:
+            # A rail stop (stall window / absolute duration / token cap) that
+            # fired during PLANNING propagates out of pipeline.run() on the
+            # first attempt (by design: rail stops never burn stage retries).
+            # It must land as the honest budget-governed outcome with the stop
+            # reason on run.end - not as a generic "model transport error"
+            # (live finding, run eaa09546: the stall rail fired 95 min into a
+            # hard 429 wall and the cockpit showed a transport error with no
+            # stop_reason).
+            stop_reason = str(exc)
+            logger.warning(
+                "run stopped by budget governor during planning",
+                run_id=run_id,
+                reason=stop_reason[:300],
+            )
+            publisher.publish(
+                run_id,
+                {
+                    "event": "budget.exhausted",
+                    "run_id": run_id,
+                    "reason": stop_reason[:300],
+                },
+            )
+            publisher.publish(
+                run_id,
+                {
+                    "event": "run.end",
+                    "run_id": run_id,
+                    "success": False,
+                    "stop_reason": stop_reason[:300],
+                },
+            )
+            return {
+                "run_id": run_id,
+                "success": False,
+                "outcome": f"NOT VERIFIED: run stopped by budget governor - {stop_reason}",
+                "evidence_path": "",
+                "flags": ["stopped by budget governor"],
+            }
         except Exception as exc:  # transport death mid-run: fail honestly, never hang
             logger.error("agent run crashed", run_id=run_id, error=str(exc)[:300])
             publisher.publish(
